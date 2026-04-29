@@ -24,6 +24,10 @@ The default config listens on:
 - `13505/tcp` - control alias
 - `2000/udp` - race relay
 
+Game clients also need local `3658/udp` free for race peer traffic. This is not
+the server relay port, but it matters during same-machine or same-LAN testing,
+especially after a crashed/stale game instance.
+
 ## Install The Client
 
 1. Copy `client/online/dist/online.asi` into the game's `scripts` folder.

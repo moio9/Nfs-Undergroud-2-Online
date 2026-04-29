@@ -1,0 +1,24 @@
+1.-Invalid nume/account
+2.-already logged on server
+3.-the ea account is locked and cannot be used, please contact ea customer support.
+4.-the specified password is invalid
+5.-the ea account has not been authentiticated with a cd key. You must lock your cd key to an ea account before you can play onlin.A cd key can only be locked to one EA account, and the process cannot be undone.Do you want to lock you cd key to this EA account?(potiune yes/no, deci nu trebuie diconect ca nu e eroare neaparat)
+6.-doar baga tos fortat chiar daca nu creez cont
+7.-The ea server curently experience tehnical dificulties. Please try again later. If problem persists, please contact ea customer support.\
+8.-This account has been banned.
+9.-the lobby server login failed. The server may be down or there may be network problems preventing a connection this time. Check your network settings and try again later.
+10.lafel ca punctul 9.?
+11.lafel ca punctul 10.?
+12.lafel ca punctul 11.?
+13.lafel ca punctul 12.?
+
+
+PERSONA
+1.-There was a problem selecting this persona, You will be returned to EA login screen.
+2.lafel ca punctul 1.?
+3.lafel ca punctul 2.?
+
+CREATE PERSONA
+1.-This persona is already taken. Pleas try a diffrent name.
+2.-There was an error creating this persona.
+3.lafel ca punctul 2.?

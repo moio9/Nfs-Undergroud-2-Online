@@ -20,7 +20,9 @@ class Room:
     _lock    = threading.Lock()
 
     def __init__(self, name: str, host_uid: int, maxsize: int = 8,
-                 minsize: int = 2, custflags: int = 0, sysflags: int = 0):
+                 minsize: int = 2, custflags: int = 0, sysflags: int = 0,
+                 secret: str = "", private: bool = False, matched: bool = False,
+                 room_type: str = "PUBLIC"):
         with Room._lock:
             self.id = Room._counter
             Room._counter += 1
@@ -31,6 +33,10 @@ class Room:
         self.minsize    = minsize
         self.custflags  = custflags
         self.sysflags   = sysflags
+        self.secret     = str(secret or "")
+        self.private    = bool(private)
+        self.matched    = bool(matched)
+        self.type       = str(room_type or ("PRIVATE" if private else "PUBLIC")).upper()
         self.created_at = time.time()
         self.members: Set[int] = set()   # uid set
         self.door_msg   = ""             # ROOM_DOOR_MESG
@@ -49,6 +55,28 @@ class Room:
     def host(self) -> str:
         return f"uid:{self.host_uid}"
 
+    def visible_to(self, uid: int = 0, *, include_private: bool = False) -> bool:
+        uid = int(uid or 0)
+        if include_private:
+            return True
+        if uid and (uid == int(self.host_uid) or uid in self.members):
+            return True
+        if self.private:
+            return False
+        return True
+
+    def can_join(self, uid: int, secret: str = "") -> bool:
+        uid = int(uid or 0)
+        if self.full and uid not in self.members:
+            return False
+        if uid == int(self.host_uid) or uid in self.members:
+            return True
+        if self.secret and str(secret or "") != self.secret:
+            return False
+        if self.private and not self.secret:
+            return False
+        return True
+
     def to_dict(self) -> dict:
         return {
             "id":        self.id,
@@ -59,6 +87,10 @@ class Room:
             "count":     self.count,
             "custflags": self.custflags,
             "sysflags":  self.sysflags,
+            "type":      self.type,
+            "private":   1 if self.private else 0,
+            "matched":   1 if self.matched else 0,
+            "haspass":   1 if self.secret else 0,
             "assistant_uid": self.assistant_uid,
             "persist":   self.persist,
         }
@@ -84,7 +116,8 @@ class Game:
     def __init__(self, room_id: int, host_uid: int, limit: int = 8,
                  game_type: str = "PUBLIC", flags: float = 0.0,
                  secret: str = "", custom: str = "", fmt: str = "",
-                 addr: str = "0.0.0.0", port: int = 0):
+                 addr: str = "0.0.0.0", port: int = 0,
+                 minsize: int = 2, private: bool = False, matched: bool = False):
         with Game._lock:
             self.id = Game._counter
             Game._counter += 1
@@ -97,6 +130,9 @@ class Game:
         self.secret     = secret
         self.custom     = custom
         self.format     = fmt
+        self.minsize    = minsize
+        self.private    = bool(private)
+        self.matched    = bool(matched)
         self.state      = GAME_STATE_OPEN
         self._addr      = addr
         self._port      = port
@@ -134,14 +170,24 @@ class Game:
     def port(self, value: int):
         self._port = value
 
-    def add_player(self, uid: int) -> bool:
-        if uid in self.participants:
-            return False
+    def can_join(self, uid: int, secret: str = "") -> bool:
+        uid = int(uid or 0)
+        if uid == int(self.host_uid) or uid in self.participants:
+            return True
         if uid in self.kicked_uids:
             return False
         if self.count >= self.limit:
             return False
         if self.state != GAME_STATE_OPEN:
+            return False
+        if self.secret and str(secret or "") != str(self.secret or ""):
+            return False
+        return True
+
+    def add_player(self, uid: int, secret: str = "") -> bool:
+        if not self.can_join(uid, secret):
+            return False
+        if uid in self.participants:
             return False
         self.participants.append(uid)
         return True
@@ -193,6 +239,9 @@ class Game:
             "secret":  self.secret,
             "custom":  self.custom,
             "format":  self.format,
+            "minsize": self.minsize,
+            "private": 1 if self.private else 0,
+            "matched": 1 if self.matched else 0,
             "state":   self.state,
         }
 
@@ -223,14 +272,35 @@ class RoomManager:
 
     # ------------------------------------------------------------------ #
 
-    def create(self, name: str, host_uid: int, maxsize: int = 8,
-               minsize: int = 2, custflags: int = 0, sysflags: int = 0) -> Optional[Room]:
+    def create(
+        self,
+        name: str,
+        host_uid: int,
+        maxsize: int = 8,
+        minsize: int = 2,
+        custflags: int = 0,
+        sysflags: int = 0,
+        secret: str = "",
+        private: bool = False,
+        matched: bool = False,
+        room_type: str = "PUBLIC",
+    ) -> Optional[Room]:
         with self._lock:
             if len(self._rooms) >= self.max_rooms:
                 log.warning("LoadBalUpdate: No room in load balancing table. Ignoring.")
                 return None
-            room = Room(name, host_uid, min(maxsize, self.max_size),
-                        minsize, custflags, sysflags)
+            room = Room(
+                name,
+                host_uid,
+                min(maxsize, self.max_size),
+                minsize,
+                custflags,
+                sysflags,
+                secret=secret,
+                private=private,
+                matched=matched,
+                room_type=room_type,
+            )
             self._rooms[room.id] = room
             log.info("Room created: id=%d name=%r by uid=%d", room.id, name, host_uid)
             return room
@@ -245,9 +315,9 @@ class RoomManager:
                 log.info("Room destroyed: id=%d name=%r", room.id, room.name)
             return room
 
-    def join(self, room_id: int, uid: int) -> bool:
+    def join(self, room_id: int, uid: int, secret: str = "") -> bool:
         room = self.get(room_id)
-        if not room or room.full:
+        if not room or not room.can_join(uid, secret):
             return False
         room.members.add(uid)
         return True
@@ -262,6 +332,11 @@ class RoomManager:
     def list_rooms(self) -> List[Room]:
         with self._lock:
             return list(self._rooms.values())
+
+    def visible_rooms_for(self, uid: int = 0, *, include_private: bool = False) -> List[Room]:
+        with self._lock:
+            rooms = list(self._rooms.values())
+        return [room for room in rooms if room.visible_to(uid, include_private=include_private)]
 
     def count(self) -> int:
         return len(self._rooms)
@@ -287,12 +362,26 @@ class GameManager:
     def create(self, room_id: int, host_uid: int, limit: int = 8,
                game_type: str = "PUBLIC", flags: float = 0.0,
                secret: str = "", custom: str = "", fmt: str = "",
-               addr: str = "0.0.0.0", port: int = 0) -> Optional[Game]:
+               addr: str = "0.0.0.0", port: int = 0,
+               minsize: int = 2, private: bool = False, matched: bool = False) -> Optional[Game]:
         with self._lock:
             if len(self._games) >= self.max_games:
                 return None
-            game = Game(room_id, host_uid, limit, game_type,
-                        flags, secret, custom, fmt, addr, port)
+            game = Game(
+                room_id,
+                host_uid,
+                limit,
+                game_type,
+                flags,
+                secret,
+                custom,
+                fmt,
+                addr,
+                port,
+                minsize=minsize,
+                private=private,
+                matched=matched,
+            )
             self._games[game.id] = game
             self.games_created += 1
             log.info("GAME: IDENT=%d AUTO=0 CREATED at %s:%d", game.id, addr, port)
@@ -311,11 +400,11 @@ class GameManager:
                 log.info("GAME: IDENT=%d REMOVED", game.id)
         return game
 
-    def join(self, game_id: int, uid: int) -> bool:
+    def join(self, game_id: int, uid: int, secret: str = "") -> bool:
         game = self.get(game_id)
         if not game:
             return False
-        ok = game.add_player(uid)
+        ok = game.add_player(uid, secret)
         if not ok:
             log.warning("NOTINGAME: uid %d could not join game %d", uid, game_id)
         return ok

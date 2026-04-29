@@ -11,6 +11,7 @@ import socket
 import ipaddress
 from hashlib import md5
 from typing import TYPE_CHECKING
+from urllib.parse import unquote_plus
 
 from protocol import parse_message, encode_message, encode_error
 from protocol import encode_user_record, encode_room_record, encode_game_record
@@ -76,24 +77,71 @@ _LAN_DEFAULT_PARAMS = "TRACK%3d4000%0aDIR%3d0%0aLAPS%3d3"
 _LAN_REMOVED_GAME_TOMBSTONE_SEC = 15.0
 _LAN_SHORT_FRAME_TAGS = (b"newsbadc", b"userbadc")
 _LAN_ALT_FRAME_CMDS = {b"*ath", b"*pat", b"PERS", b"AUXI", b"GCRE", b"GJOI", b"GSET", b"TERM", b"*con", b"@cnt", b"@alv"}
-_LAN_AUTH_IMST_RESERVED = 0x696D7374
-_LAN_AUTH_LOGN_RESERVED = 0x6C6F676E
-_LAN_AUTH_PASS_RESERVED = 0x70617373
+_LAN_AUTH_IMST_RESERVED = int.from_bytes(b"imst", "big")
+_LAN_AUTH_LOGN_RESERVED = int.from_bytes(b"logn", "big")
+_LAN_AUTH_LOCK_RESERVED = int.from_bytes(b"lock", "big")
+_LAN_AUTH_PASS_RESERVED = int.from_bytes(b"pass", "big")
+_LAN_AUTH_IKEY_RESERVED = int.from_bytes(b"ikey", "big")
+_LAN_AUTH_TOSA_RESERVED = int.from_bytes(b"tosa", "big")
+_LAN_AUTH_DBER_RESERVED = int.from_bytes(b"dber", "big")
+_LAN_AUTH_BLAK_RESERVED = int.from_bytes(b"blak", "big")
+_LAN_AUTH_SHAR_RESERVED = int.from_bytes(b"shar", "big")
+_LAN_AUTH_MISS_RESERVED = int.from_bytes(b"miss", "big")
+_LAN_AUTH_FILT_RESERVED = int.from_bytes(b"filt", "big")
+_LAN_AUTH_TIME_RESERVED = int.from_bytes(b"time", "big")
+_LAN_AUTH_OVER_RESERVED = int.from_bytes(b"over", "big")
+_LAN_GJOI_PASS_RESERVED = int.from_bytes(b"pass", "big")
+_LAN_GJOI_FULL_RESERVED = int.from_bytes(b"full", "big")
+_LAN_GJOI_KICK_RESERVED = int.from_bytes(b"kick", "big")
+_LAN_GJOI_LOCK_RESERVED = int.from_bytes(b"lock", "big")
 _LAN_DUPL_RESERVED = 0x6475706C
+_LAN_INVP_RESERVED = int.from_bytes(b"invp", "big")
+_LAN_NSPC_RESERVED = int.from_bytes(b"nspc", "big")
+_LAN_MAUT_RESERVED = int.from_bytes(b"maut", "big")
+_LAN_PSET_RESERVED = int.from_bytes(b"pset", "big")
 _LAN_ALT_SESS = "517"
+_LAN_PASSWORD_SYSFLAG = 0x10000
+_LAN_PRIVATE_SYSFLAG = 0x40000
+_LAN_MATCHED_SYSFLAG = 0x80000
+_LAN_RANKED_SYSFLAG = _LAN_MATCHED_SYSFLAG
+_LAN_CUST_CLASS_MASK = 0x000000F0
+_LAN_CUST_EXTRA_MASK = 0x00000100
+_LAN_CUST_RESTRICTION_MASK = _LAN_CUST_CLASS_MASK | _LAN_CUST_EXTRA_MASK
+_LAN_CUST_MODE_MASK = 0xFE000000
+_LAN_CUST_FILTER_MASK = _LAN_CUST_RESTRICTION_MASK | _LAN_CUST_MODE_MASK
+_LAN_CUST_MODE_BY_GAME_MODE = {
+    8: 0x02000000,  # Outrun
+    0: 0x04000000,  # Circuit
+    1: 0x08000000,  # Sprint
+    2: 0x10000000,  # Drag
+    3: 0x20000000,  # Drift
+    4: 0x80000000,  # Street X
+    5: 0x40000000,  # URL
+    10: 0x40000000, # URL alternate/tournament mode
+}
+_LAN_CUST_MODE_BY_RACE_CATEGORY = {
+    1: 0x04000000,  # Circuit
+    2: 0x08000000,  # Sprint
+    3: 0x10000000,  # Drag
+    4: 0x20000000,  # Drift/URL bucket used by current stats categories
+}
 _LAN_READY_OPFLAG = 134217728
 _LAN_READY_USER_FLAG = 0x2000000
 _LAN_TRACE_RECV_CMDS = {
     "gcre", "GCRE", "gjoi", "GJOI", "gset", "GSET", "gsea", "glea", "gdel", "onln", "KICK", "TERM",
+    "snap",
 }
 _LAN_TRACE_SEND_CMDS = {
     "gcre", "gjoi", "gset", "+usr", "+gam", "+agm", "+mgm", "+who", "+msg", "onln", "glea", "gdel", "KICK", "TERM", "+sst", "+ses",
+    "snap", "+snp",
 }
-_LAN_TRACE_ORDER_CMDS = {"gcre", "gjoi", "gset", "+mgm", "+ses"}
+_LAN_TRACE_ORDER_CMDS = {"gcre", "gjoi", "gset", "+mgm", "+ses", "snap", "+snp"}
 _LAN_TRACE_FIELDS = (
-    "IDENT", "NAME", "HOST", "COUNT", "CUSTFLAGS", "SYSFLAGS", "USERFLAGS",
+    "IDENT", "NAME", "HOST", "COUNT", "CUSTFLAGS", "CUSTMASK", "SYSFLAGS", "SYSMASK", "USERFLAGS",
+    "PASS", "HASPASS", "PRIV", "PRIVATE", "MATCHED",
     "KICK", "PERS", "I", "M", "N", "F", "G", "GAME", "ROOM", "SYNC",
     "OPID0", "OPPO0", "OPFLAG0", "OPID1", "OPPO1", "OPFLAG1",
+    "INDEX", "CHAN", "START", "RANGE", "SEQN", "COUNT", "TOTAL", "MORE", "P", "S", "O",
 )
 _LAN_TRACE_REDACT_FIELDS = {"X", "AUX", "TEXT", "S"}
 _LAN_20921_CERT_PREFIX = bytes.fromhex(
@@ -144,6 +192,7 @@ class ClientHandler:
         self._probe_last_ref = ""
         self._probe_aux_text = ""
         self._probe_gsea_seen = 0
+        self._lan_last_gsea_kv = None
         self._probe_seen_sele = False
         self._probe_seen_auth = False
         self._probe_deferred_addr_frame = b""
@@ -188,6 +237,507 @@ class ClientHandler:
         else:
             value += ("%0a" if value else "") + "LAPS%3d3"
         return value
+
+    @staticmethod
+    def _lan_decode_params_text(params: str) -> str:
+        raw = str(params or "").strip()
+        if not raw:
+            return ""
+        try:
+            decoded = unquote_plus(raw)
+        except Exception:
+            decoded = (
+                raw.replace("%3d", "=")
+                .replace("%3D", "=")
+                .replace("%0a", "\n")
+                .replace("%0A", "\n")
+            )
+        return decoded.replace("\r", "\n")
+
+    @classmethod
+    def _lan_params_map(cls, params: str) -> tuple[dict[str, str], str]:
+        decoded = cls._lan_decode_params_text(params)
+        parsed: dict[str, str] = {}
+        for chunk in decoded.replace("&", "\n").replace("\t", "\n").splitlines():
+            if "=" not in chunk:
+                continue
+            key, value = chunk.split("=", 1)
+            key = key.strip().upper()
+            if key:
+                parsed[key] = value.strip()
+        return parsed, decoded
+
+    @staticmethod
+    def _lan_race_category_from_value(value, *, numeric_zero_based: bool = True) -> int | None:
+        text = str(value or "").strip().lower()
+        if not text:
+            return None
+        aliases = {
+            "all": 0,
+            "overall": 0,
+            "circuit": 1,
+            "circ": 1,
+            "sprint": 2,
+            "drag": 3,
+            "drift": 4,
+            "url": 4,
+        }
+        compact = "".join(ch for ch in text if ch.isalnum())
+        if text in aliases:
+            return aliases[text]
+        if compact in aliases:
+            return aliases[compact]
+        try:
+            raw_idx = int(text, 0)
+        except Exception:
+            try:
+                raw_idx = int(text, 10)
+            except Exception:
+                return None
+        if numeric_zero_based:
+            return max(0, min(4, raw_idx + 1))
+        return max(0, min(4, raw_idx))
+
+    @staticmethod
+    def _lan_cust_mode_bit_from_value(value) -> int | None:
+        text = str(value or "").strip().lower()
+        if not text:
+            return None
+        aliases = {
+            "outrun": 0x02000000,
+            "out_run": 0x02000000,
+            "out run": 0x02000000,
+            "circuit": 0x04000000,
+            "circ": 0x04000000,
+            "sprint": 0x08000000,
+            "drag": 0x10000000,
+            "drift": 0x20000000,
+            "streetx": 0x80000000,
+            "street_x": 0x80000000,
+            "street x": 0x80000000,
+            "url": 0x40000000,
+        }
+        compact = "".join(ch for ch in text if ch.isalnum())
+        if text in aliases:
+            return aliases[text]
+        if compact in aliases:
+            return aliases[compact]
+        try:
+            mode = int(text, 0)
+        except Exception:
+            try:
+                mode = int(text, 10)
+            except Exception:
+                return None
+        return _LAN_CUST_MODE_BY_GAME_MODE.get(mode)
+
+    @classmethod
+    def _lan_cust_mode_bit_from_fields(cls, fields: dict | None = None, params: str = "") -> int | None:
+        fields = fields or {}
+        for key in ("GAMEMODE", "GAME_MODE", "RACETYPE", "RACE_TYPE", "RACE", "TYPE", "MODE", "CATEGORY"):
+            for candidate in (key, key.lower()):
+                if candidate in fields:
+                    mode_bit = cls._lan_cust_mode_bit_from_value(fields.get(candidate))
+                    if mode_bit is not None:
+                        return mode_bit
+        param_map, decoded_params = cls._lan_params_map(params)
+        for key in ("GAMEMODE", "GAME_MODE", "RACETYPE", "RACE_TYPE", "RACE", "TYPE", "MODE", "CATEGORY"):
+            if key in param_map:
+                mode_bit = cls._lan_cust_mode_bit_from_value(param_map.get(key))
+                if mode_bit is not None:
+                    return mode_bit
+        lower_params = decoded_params.lower()
+        for marker, mode_bit in (
+            ("outrun", 0x02000000),
+            ("out run", 0x02000000),
+            ("circuit", 0x04000000),
+            ("sprint", 0x08000000),
+            ("drag", 0x10000000),
+            ("drift", 0x20000000),
+            ("streetx", 0x80000000),
+            ("street x", 0x80000000),
+            ("url", 0x40000000),
+        ):
+            if marker in lower_params:
+                return mode_bit
+        track = param_map.get("TRACK", "")
+        try:
+            track_id = int(str(track).strip(), 0)
+        except Exception:
+            return None
+        if 4000 <= track_id < 5000:
+            return 0x04000000
+        if 5000 <= track_id < 6000:
+            return 0x08000000
+        if 6000 <= track_id < 7000:
+            return 0x10000000
+        if 7000 <= track_id < 9000:
+            return 0x20000000
+        return None
+
+    @classmethod
+    def _lan_race_category_from_fields(cls, fields: dict | None = None, params: str = "") -> int | None:
+        fields = fields or {}
+        for key in ("RACETYPE", "RACE_TYPE", "RACE", "TYPE", "MODE", "CATEGORY"):
+            for candidate in (key, key.lower()):
+                if candidate in fields:
+                    category = cls._lan_race_category_from_value(fields.get(candidate), numeric_zero_based=True)
+                    if category is not None:
+                        return category
+        param_map, decoded_params = cls._lan_params_map(params)
+        for key in ("RACETYPE", "RACE_TYPE", "RACE", "MODE", "CATEGORY", "TYPE"):
+            if key in param_map:
+                category = cls._lan_race_category_from_value(param_map.get(key), numeric_zero_based=True)
+                if category is not None:
+                    return category
+        lower_params = decoded_params.lower()
+        for marker, category in (
+            ("circuit", 1),
+            ("sprint", 2),
+            ("drag", 3),
+            ("drift", 4),
+            ("url", 4),
+        ):
+            if marker in lower_params:
+                return category
+        track = param_map.get("TRACK", "")
+        try:
+            track_id = int(str(track).strip(), 0)
+        except Exception:
+            return None
+        if 4000 <= track_id < 5000:
+            return 1
+        if 5000 <= track_id < 6000:
+            return 2
+        if 6000 <= track_id < 7000:
+            return 3
+        if 7000 <= track_id < 9000:
+            return 4
+        return None
+
+    @staticmethod
+    def _field_text(fields: dict | None, *keys: str, default: str = "") -> str:
+        fields = fields or {}
+        for key in keys:
+            for candidate in (key, key.upper(), key.lower()):
+                if candidate in fields:
+                    value = str(fields.get(candidate, "") or "").strip()
+                    if value:
+                        return value
+        return default
+
+    @staticmethod
+    def _field_bool(fields: dict | None, *keys: str, default: bool = False) -> bool:
+        fields = fields or {}
+        for key in keys:
+            for candidate in (key, key.upper(), key.lower()):
+                if candidate not in fields:
+                    continue
+                raw = str(fields.get(candidate, "") or "").strip().lower()
+                if raw in ("", "1", "true", "yes", "on", "private", "matched", "ranked"):
+                    return True
+                if raw in ("0", "false", "no", "off", "public", "open"):
+                    return False
+                try:
+                    return int(float(raw)) != 0
+                except Exception:
+                    return default
+        return default
+
+    @staticmethod
+    def _field_int(fields: dict | None, *keys: str, default: int = 0, min_value: int | None = None, max_value: int | None = None) -> int:
+        fields = fields or {}
+        value = default
+        for key in keys:
+            for candidate in (key, key.upper(), key.lower()):
+                if candidate not in fields:
+                    continue
+                try:
+                    value = int(float(str(fields.get(candidate, "") or "").strip()))
+                except Exception:
+                    value = default
+                if min_value is not None:
+                    value = max(int(min_value), value)
+                if max_value is not None:
+                    value = min(int(max_value), value)
+                return value
+        return value
+
+    @classmethod
+    def _lan_game_password_from_fields(cls, fields: dict | None) -> str:
+        return cls._field_text(fields, "PASS", "PASSWORD", "PWD", "SECRET", "ROOMPASS", default="")[:12]
+
+    @classmethod
+    def _room_game_meta_from_fields(cls, fields: dict | None, *, default_limit: int = 4) -> dict:
+        fields = fields or {}
+        limit = cls._field_int(fields, "MAXSIZE", "LIMIT", default=default_limit, min_value=2, max_value=8)
+        minsize = cls._field_int(fields, "MINSIZE", "MIN", default=2, min_value=1, max_value=limit)
+        custflags = cls._field_text(fields, "CUSTFLAGS", "FLAGS", default="0")
+        sysflags = cls._field_text(fields, "SYSFLAGS", default="0")
+        secret = cls._lan_game_password_from_fields(fields)
+        room_type = cls._field_text(fields, "TYPE", "KIND", "ROOMTYPE", default="")
+        private = cls._field_bool(fields, "PRIVATE", "PRIV", "HIDDEN", default=False)
+        matched = cls._field_bool(fields, "MATCHED", "MATCH", "QUICKMATCH", default=False)
+        ranked = cls._field_bool(fields, "RANKED", "RANK", default=False)
+        custflags_int = cls._metadata_flags_int(custflags)
+        custflags_u32 = cls._metadata_flags_u32(custflags)
+        sysflags_int = cls._metadata_flags_int(sysflags)
+        sysflags_u32 = cls._metadata_flags_u32(sysflags)
+        password_marker = bool(secret)
+        # NFSU2's LAN create does not always send PRIV explicitly. SYSFLAGS
+        # plus password metadata are the reliable privacy markers; CUSTFLAGS
+        # carries lobby filters such as class/performance restriction, and
+        # bit 0x100 is included in CUSTMASK searches, not a privacy marker.
+        low_cust = custflags_u32 & 0xff
+        if not secret and not private and (sysflags_u32 & _LAN_PRIVATE_SYSFLAG):
+            if low_cust in {0x01, 0x10, 0x11, 0xF1}:
+                private = True
+            elif low_cust == 0x13:
+                password_marker = True
+        if sysflags_u32 & _LAN_RANKED_SYSFLAG:
+            ranked = True
+        type_key = room_type.strip().lower()
+        if type_key in ("private", "priv", "closed"):
+            private = True
+        if type_key in ("ranked", "rank"):
+            ranked = True
+        if type_key in ("match", "matched", "quickmatch"):
+            matched = True
+        if not room_type:
+            room_type = "MATCHED" if matched else ("RANKED" if ranked else ("PRIVATE" if private else "PUBLIC"))
+        sysflags_int = cls._metadata_flags_int(cls._sysflags_with_password_bit(sysflags, secret))
+        if private:
+            sysflags_int |= _LAN_PRIVATE_SYSFLAG
+        if matched or ranked:
+            sysflags_int |= _LAN_RANKED_SYSFLAG
+        sysflags = str(max(0, sysflags_int))
+        return {
+            "limit": limit,
+            "minsize": minsize,
+            "custflags": custflags,
+            "sysflags": sysflags,
+            "secret": secret,
+            "password_marker": password_marker,
+            "private": private,
+            "matched": matched,
+            "ranked": ranked,
+            "type": room_type.upper(),
+        }
+
+    @staticmethod
+    def _metadata_flags_int(value, default: int = 0) -> int:
+        try:
+            return int(str(value or "").strip(), 0)
+        except Exception:
+            try:
+                return int(float(str(value or "").strip()))
+            except Exception:
+                return int(default)
+
+    @classmethod
+    def _metadata_flags_u32(cls, value, default: int = 0) -> int:
+        return cls._metadata_flags_int(value, default) & 0xFFFFFFFF
+
+    @classmethod
+    def _sysflags_with_password_bit(cls, value, secret: str = "") -> str:
+        flags = cls._metadata_flags_u32(value)
+        if str(secret or ""):
+            flags |= _LAN_PASSWORD_SYSFLAG
+        else:
+            flags &= ~_LAN_PASSWORD_SYSFLAG
+        return str(flags & 0xFFFFFFFF)
+
+    def _apply_lan_game_metadata(self, game, meta: dict) -> None:
+        if game is None:
+            return
+        game.limit = int(meta.get("limit", getattr(game, "limit", 4)) or getattr(game, "limit", 4))
+        game.minsize = int(meta.get("minsize", getattr(game, "minsize", 2)) or getattr(game, "minsize", 2))
+        game.type = str(meta.get("type", getattr(game, "type", "PUBLIC")) or "PUBLIC").upper()
+        game.secret = str(meta.get("secret", getattr(game, "secret", "")) or "")[:12]
+        game.private = bool(meta.get("private", getattr(game, "private", False)))
+        game.matched = bool(meta.get("matched", getattr(game, "matched", False)))
+        game.flags = float(self._metadata_flags_int(meta.get("custflags", getattr(game, "flags", 0)), int(float(getattr(game, "flags", 0) or 0))))
+        sysflags = self._sysflags_with_password_bit(meta.get("sysflags", getattr(game, "_lan_sysflags", 0)), game.secret)
+        setattr(game, "_lan_minsize", game.minsize)
+        setattr(game, "_lan_custflags", str(meta.get("custflags", int(game.flags)) or int(game.flags)))
+        setattr(game, "_lan_sysflags", sysflags)
+        setattr(game, "_lan_private", game.private)
+        setattr(game, "_lan_matched", game.matched)
+        setattr(game, "_lan_ranked", bool(meta.get("ranked", getattr(game, "_lan_ranked", False))))
+        setattr(game, "_lan_secret", game.secret)
+        setattr(game, "_lan_password_marker", bool(meta.get("password_marker", bool(game.secret))))
+        setattr(game, "_lan_type", game.type)
+
+    def _lan_game_secret(self, game) -> str:
+        return str(getattr(game, "_lan_secret", getattr(game, "secret", "")) or "")
+
+    def _lan_game_password_marker(self, game) -> bool:
+        return bool(self._lan_game_secret(game) or getattr(game, "_lan_password_marker", False))
+
+    def _lan_game_private(self, game) -> bool:
+        return bool(getattr(game, "_lan_private", getattr(game, "private", False)))
+
+    def _lan_game_matched(self, game) -> bool:
+        return bool(getattr(game, "_lan_matched", getattr(game, "matched", False)))
+
+    def _lan_game_ranked(self, game) -> bool:
+        return bool(getattr(game, "_lan_ranked", False))
+
+    def _lan_game_public_custflags(self, game) -> str:
+        return self._lan_game_custflags(game, str(int(float(getattr(game, "flags", 0) or 0))))
+
+    def _lan_game_public_sysflags(self, game) -> str:
+        return self._lan_game_sysflags(game)
+
+    def _lan_game_search_sysflags(self, game) -> int:
+        value = self._metadata_flags_u32(self._lan_game_sysflags(game))
+        if self._lan_game_private(game):
+            value |= _LAN_PRIVATE_SYSFLAG
+        else:
+            value &= ~_LAN_PRIVATE_SYSFLAG
+        if self._lan_game_matched(game) or self._lan_game_ranked(game):
+            value |= _LAN_RANKED_SYSFLAG
+        else:
+            value &= ~_LAN_RANKED_SYSFLAG
+        return max(0, value)
+
+    def _lan_gsea_cust_filters_enabled(self) -> bool:
+        raw = self.srv.cfg.get("LAN_GSEA_CUST_FILTERS", 1)
+        if isinstance(raw, str):
+            return raw.strip().lower() not in {"0", "false", "no", "off", "disable", "disabled", "ignore"}
+        try:
+            return int(raw or 0) != 0
+        except Exception:
+            return True
+
+    def _lan_game_matches_search(self, game, kv: dict | None) -> bool:
+        kv = kv or {}
+        game_sysflags = self._lan_game_search_sysflags(game)
+        wanted_sys = self._metadata_flags_u32(self._field_text(kv, "SYSFLAGS", default="0"))
+        sysmask = self._metadata_flags_u32(self._field_text(kv, "SYSMASK", default="0"))
+        wanted_cust = self._metadata_flags_u32(self._field_text(kv, "CUSTFLAGS", default="0"))
+        custmask = self._metadata_flags_u32(self._field_text(kv, "CUSTMASK", default="0"))
+        if not self._lan_game_private(game):
+            sysmask &= ~_LAN_PRIVATE_SYSFLAG
+        if sysmask and (game_sysflags & sysmask) != (wanted_sys & sysmask):
+            return False
+        if not self._lan_gsea_cust_filters_enabled():
+            return True
+        # NFSU2 sends car/performance restrictions and mode through CUSTFLAGS.
+        # Stock master filtering compares the requested bits under CUSTMASK
+        # directly; 0xF0 means "unrestricted/all classes", not a wildcard for
+        # class-restricted rooms.
+        effective_custmask = custmask & _LAN_CUST_FILTER_MASK
+        if effective_custmask:
+            game_cust = self._metadata_flags_u32(self._lan_game_custflags(game))
+            if (game_cust & effective_custmask) != (wanted_cust & effective_custmask):
+                return False
+        return True
+
+    def _lan_search_includes_private(self, kv: dict | None) -> bool:
+        wanted_sys = self._metadata_flags_int(self._field_text(kv or {}, "SYSFLAGS", default="0"))
+        sysmask = self._metadata_flags_int(self._field_text(kv or {}, "SYSMASK", default="0"))
+        return bool((sysmask & _LAN_PRIVATE_SYSFLAG) and (wanted_sys & _LAN_PRIVATE_SYSFLAG))
+
+    def _lan_search_includes_matched(self, kv: dict | None) -> bool:
+        wanted_sys = self._metadata_flags_int(self._field_text(kv or {}, "SYSFLAGS", default="0"))
+        sysmask = self._metadata_flags_int(self._field_text(kv or {}, "SYSMASK", default="0"))
+        return bool((sysmask & _LAN_MATCHED_SYSFLAG) and (wanted_sys & _LAN_MATCHED_SYSFLAG))
+
+    def _lan_game_access_fields(self, game) -> list[str]:
+        fields: list[str] = []
+        if self._lan_game_password_marker(game):
+            fields.append("HASPASS=1")
+        if self._lan_game_private(game):
+            fields.extend(["PRIV=1", "PRIVATE=1"])
+        if self._lan_game_matched(game):
+            fields.append("MATCHED=1")
+        return fields
+
+    def _lan_join_secret_from_fields(self, fields: dict | None) -> str:
+        return self._lan_game_password_from_fields(fields)
+
+    def _lan_game_join_allowed(self, game, fields: dict | None, *, invited: bool = False) -> tuple[bool, str]:
+        if game is None:
+            return False, "missing"
+        uid = int(getattr(self.user, "uid", 0) or 0)
+        participants = {int(item) for item in (getattr(game, "participants", []) or [])}
+        if uid == int(getattr(game, "host_uid", 0) or 0) or uid in participants:
+            return True, "already_joined"
+        if uid in {int(item) for item in (getattr(game, "kicked_uids", set()) or set())}:
+            return False, "kick"
+        if len(participants) >= int(getattr(game, "limit", 0) or 0):
+            return False, "full"
+        if str(getattr(game, "state", "") or "") != "OPEN":
+            return False, "lock"
+        supplied_secret = self._lan_join_secret_from_fields(fields)
+        required_secret = self._lan_game_secret(game)
+        if required_secret and supplied_secret != required_secret:
+            return False, "password"
+        if self._lan_game_matched(game) and not invited:
+            return False, "matched"
+        return True, "ok"
+
+    @staticmethod
+    def _lan_gjoi_reject_reserved(reason: str) -> int:
+        reason = str(reason or "").strip().lower()
+        if reason in {"password", "bad_password", "missing_password"}:
+            return _LAN_GJOI_PASS_RESERVED
+        if reason in {"full"}:
+            return _LAN_GJOI_FULL_RESERVED
+        if reason in {"kick", "kicked"}:
+            return _LAN_GJOI_KICK_RESERVED
+        return _LAN_GJOI_LOCK_RESERVED
+
+    def _lan_gjoi_reject_frame(self, reason: str) -> bytes:
+        return self._make_20922_binary_message(
+            "gjoi",
+            b"\x00",
+            reserved_be32=self._lan_gjoi_reject_reserved(reason),
+        )
+
+    def _lan_game_race_category(self, game, fields: dict | None = None) -> int:
+        explicit = self._lan_race_category_from_fields(fields, "") if fields else None
+        if explicit is not None:
+            return explicit
+        try:
+            stored = int(getattr(game, "_lan_race_category"))
+            return max(0, min(4, stored))
+        except Exception:
+            pass
+        parsed = self._lan_race_category_from_fields({}, self._lan_game_params(game) if game is not None else "")
+        return parsed if parsed is not None else 0
+
+    @classmethod
+    def _lan_custflags_for_race_category(cls, custflags, category: int | None, *, params: str = ""):
+        mode_bit = cls._lan_cust_mode_bit_from_fields({}, params)
+        if not mode_bit:
+            mode_bit = _LAN_CUST_MODE_BY_RACE_CATEGORY.get(int(category or 0))
+        if not mode_bit:
+            return str(custflags)
+        value = cls._metadata_flags_u32(custflags)
+        value = (value & ~_LAN_CUST_MODE_MASK) | int(mode_bit)
+        return str(value & 0xFFFFFFFF)
+
+    def _lan_update_game_race_category(self, game, *, params: str = "") -> int:
+        if game is None:
+            return 0
+        source_params = params or self._lan_game_params(game)
+        category = self._lan_race_category_from_fields({}, source_params)
+        if category is not None:
+            setattr(game, "_lan_race_category", category)
+        normalized = self._lan_custflags_for_race_category(
+            self._lan_game_custflags(game),
+            category,
+            params=source_params,
+        )
+        if normalized != str(self._lan_game_custflags(game)):
+            setattr(game, "_lan_custflags", normalized)
+            try:
+                game.flags = float(self._metadata_flags_int(normalized))
+            except Exception:
+                pass
+        return self._lan_game_race_category(game)
 
     def _lan_term_sst_delay(self) -> float:
         try:
@@ -837,13 +1387,13 @@ class ClientHandler:
             return True
 
     @staticmethod
-    def _lan_trace_kv_text(kv: dict) -> str:
+    def _lan_trace_kv_text(kv: dict, *, reveal_stats: bool = False) -> str:
         parts = []
         for key in _LAN_TRACE_FIELDS:
             if key not in kv:
                 continue
             value = str(kv.get(key, "") or "")
-            if key in _LAN_TRACE_REDACT_FIELDS:
+            if key in _LAN_TRACE_REDACT_FIELDS and not (reveal_stats and key == "S"):
                 value = f"<{len(value)} chars>"
             elif len(value) > 96:
                 value = value[:96] + "..."
@@ -898,7 +1448,7 @@ class ClientHandler:
                     cmd,
                     total,
                     key_order,
-                    self._lan_trace_kv_text(kv),
+                    self._lan_trace_kv_text(kv, reveal_stats=(cmd == "+snp")),
                 )
                 traced += 1
             off += total
@@ -991,17 +1541,26 @@ class ClientHandler:
 
     def _ensure_registered_user(self):
         if self.srv.is_user_banned(self.user):
-            self.user.connected = False
             self._disconnect_reason = "admin_ban"
             return False
         if self.srv.users.get(int(self.user.uid)) is not None:
             return True
         if not self.srv.users.add(self.user):
-            self.user.connected = False
             self._disconnect_reason = "server_full"
             return False
         self.srv.request_master_stat_refresh()
         return True
+
+    def _server_accepts_new_user(self) -> bool:
+        if self.srv.users.get(int(self.user.uid)) is not None:
+            return True
+        try:
+            max_users = int(getattr(self.srv.users, "max_users", 0) or 0)
+        except Exception:
+            max_users = 0
+        if max_users <= 0:
+            return True
+        return len(self.srv.users.all_users()) < max_users
 
     def _cleanup_replaced_detached_users(self):
         if bool(getattr(self, "_lan_detached_replacement_done", False)):
@@ -1217,40 +1776,155 @@ class ClientHandler:
                 return other
         return None
 
-    def _lan_reject_persona_conflict(self, send_frame, persona: str, conflict, stage: str) -> None:
+    @staticmethod
+    def _lan_persona_reason_text(reason: str) -> str:
+        return {
+            "dupl": "Persona is already in use.",
+            "duplicate": "Persona is already in use.",
+            "invp": "Persona is invalid.",
+            "invalid_persona": "Persona is invalid.",
+            "nspc": "No persona slots are available.",
+            "no_space": "No persona slots are available.",
+            "maut": "Persona selection requires authentication.",
+            "must_auth": "Persona selection requires authentication.",
+            "pset": "Persona is already set.",
+            "persona_set": "Persona is already set.",
+        }.get(str(reason or "").strip().lower(), "Persona request rejected.")
+
+    @staticmethod
+    def _lan_persona_reject_reserved(reason: str) -> int:
+        key = str(reason or "").strip().lower()
+        if len(key) == 8 and key[:4] in ("cper", "pers"):
+            key = key[4:]
+        key = key.replace("-", "_").replace(" ", "_")
+        return {
+            "dupl": _LAN_DUPL_RESERVED,
+            "duplicate": _LAN_DUPL_RESERVED,
+            "already_exists": _LAN_DUPL_RESERVED,
+            "in_use": _LAN_DUPL_RESERVED,
+            "invp": _LAN_INVP_RESERVED,
+            "invalid": _LAN_INVP_RESERVED,
+            "invalid_persona": _LAN_INVP_RESERVED,
+            "nspc": _LAN_NSPC_RESERVED,
+            "no_space": _LAN_NSPC_RESERVED,
+            "slots_full": _LAN_NSPC_RESERVED,
+            "maut": _LAN_MAUT_RESERVED,
+            "must_auth": _LAN_MAUT_RESERVED,
+            "not_authenticated": _LAN_MAUT_RESERVED,
+            "pset": _LAN_PSET_RESERVED,
+            "persona_set": _LAN_PSET_RESERVED,
+            "already_set": _LAN_PSET_RESERVED,
+        }.get(key, _LAN_INVP_RESERVED)
+
+    @staticmethod
+    def _lan_persona_is_valid(persona: str) -> bool:
+        text = str(persona or "").strip()
+        if not text:
+            return False
+        if len(text.encode("utf-8", errors="ignore")) > 32:
+            return False
+        return not any(ch in text for ch in "\x00\r\n\t")
+
+    def _lan_persona_allowed_for_auth_account(self, persona: str) -> bool:
+        personas = [str(item or "").strip().lower() for item in (self._auth_personas or []) if str(item or "").strip()]
+        if not personas:
+            return True
+        return str(persona or "").strip().lower() in personas
+
+    def _lan_persona_slots_full(self, persona: str) -> bool:
         try:
-            if str(stage or "").lower() == "cper":
-                send_frame(
-                    self._make_20922_signed_binary_message(
-                        "cper",
-                        b"\x00",
-                        9,
-                        reserved_be32=_LAN_DUPL_RESERVED,
-                    )
-                )
+            limit = int(self.srv.cfg.get("LAN_PERSONA_MAX_PERSONAS", 0) or 0)
+        except Exception:
+            limit = 0
+        if limit <= 0:
+            return False
+        personas = {
+            str(item or "").strip().lower()
+            for item in (self._auth_personas or [])
+            if str(item or "").strip()
+        }
+        if str(persona or "").strip().lower() in personas:
+            return False
+        return len(personas) >= limit
+
+    def _lan_persona_reject_frame(self, cmd4: str, reason: str) -> bytes:
+        cmd = "cper" if str(cmd4 or "").lower() == "cper" else "pers"
+        return self._make_20922_signed_binary_message(
+            cmd,
+            b"\x00",
+            9,
+            reserved_be32=self._lan_persona_reject_reserved(reason),
+        )
+
+    def _lan_reject_persona(self, send_frame, persona: str, stage: str, reason: str, *, conflict=None) -> None:
+        stage_l = str(stage or "").lower()
+        try:
+            if stage_l in ("cper", "pers"):
+                send_frame(self._lan_persona_reject_frame(stage_l, reason))
             else:
                 send_frame(self._make_short_frame("userbadc"))
         except Exception:
             pass
-        conflict_uid = int(getattr(conflict, "uid", 0) or 0)
+        conflict_uid = int(getattr(conflict, "uid", 0) or 0) if conflict is not None else 0
         log.warning(
-            "[uid=%d] LAN persona rejected stage=%s persona=%s already_uid=%d already_name=%s",
+            "[uid=%d] LAN persona rejected stage=%s reason=%s persona=%s already_uid=%d already_name=%s text=%s",
             self.user.uid,
             stage,
+            reason,
             str(persona or "-")[:64],
             conflict_uid,
-            str(getattr(conflict, "name", "") or "-")[:64],
+            str(getattr(conflict, "name", "") or "-")[:64] if conflict is not None else "-",
+            self._lan_persona_reason_text(reason),
         )
-        if str(stage or "").lower() == "cper":
+        if stage_l in ("cper", "pers"):
             return
-        self._disconnect_reason = f"persona_in_use:{stage}"
+        self._disconnect_reason = f"persona_rejected:{stage}:{reason}"
         self.user.connected = False
         try:
             self.user.conn.shutdown(socket.SHUT_RDWR)
         except Exception:
             pass
 
+    def _lan_reject_persona_conflict(self, send_frame, persona: str, conflict, stage: str) -> None:
+        reason = "dupl" if str(stage or "").lower() == "cper" else "invp"
+        self._lan_reject_persona(send_frame, persona, stage, reason, conflict=conflict)
+
+    def _lan_persona_precheck_or_reject(self, cmd: str, requested: str, send_frame) -> bool:
+        stage = str(cmd or "").lower()
+        forced_reason = ""
+        try:
+            forced_reason = self.srv.pop_forced_persona_reject(stage, requested)
+        except Exception:
+            forced_reason = ""
+        if forced_reason:
+            self._lan_reject_persona(send_frame, requested, stage, forced_reason)
+            return False
+        if not self._lan_persona_is_valid(requested):
+            self._lan_reject_persona(send_frame, requested, stage, "invp")
+            return False
+        try:
+            blacklist_reason = self.srv.lan_persona_blacklist_reject_reason(requested, stage)
+        except Exception:
+            blacklist_reason = ""
+        if blacklist_reason:
+            self._lan_reject_persona(send_frame, requested, stage, blacklist_reason)
+            return False
+        if stage == "cper" and self._lan_persona_slots_full(requested):
+            self._lan_reject_persona(send_frame, requested, stage, "nspc")
+            return False
+        if stage == "pers":
+            if self.srv.lan_auth_verify_enabled() and not self._probe_seen_auth:
+                self._lan_reject_persona(send_frame, requested, stage, "maut")
+                return False
+            if not self._lan_persona_allowed_for_auth_account(requested):
+                self._lan_reject_persona(send_frame, requested, stage, "invp")
+                return False
+        return True
+
     def _lan_claim_persona_or_reject(self, persona: str, send_frame, stage: str) -> bool:
+        if str(stage or "").lower() in ("cper", "pers"):
+            if not self._lan_persona_precheck_or_reject(stage, persona, send_frame):
+                return False
         self._cleanup_replaced_detached_users()
         conflict = self._lan_persona_conflict(persona)
         if conflict is None:
@@ -1389,7 +2063,14 @@ class ClientHandler:
     def _lan_rept_ack_frame(self) -> bytes:
         return self._make_20922_tab_message("rept", ["TEXT=Report complete"])
 
-    def _lan_visible_games_for_user(self, user: User | None, *, include_kicked: bool = False) -> list:
+    def _lan_visible_games_for_user(
+        self,
+        user: User | None,
+        *,
+        include_kicked: bool = False,
+        include_private: bool = False,
+        include_matched: bool = False,
+    ) -> list:
         uid = int(getattr(user, "uid", 0) or 0) if user is not None else 0
         games = []
         for game in self.srv.games.list_games():
@@ -1409,10 +2090,25 @@ class ClientHandler:
                 continue
             if host_uid and (host_user is None or not getattr(host_user, "connected", False)):
                 continue
+            viewer_is_member = bool(uid and (uid == host_uid or uid in {int(part_uid) for part_uid in participants}))
+            if not viewer_is_member and self._lan_game_private(game) and not include_private:
+                continue
+            if not viewer_is_member and self._lan_game_matched(game) and not include_matched:
+                continue
             games.append(game)
         return games
 
-    def _lan_game_count(self, user: User | None = None) -> int:
+    def _lan_games_for_search(self, user: User | None, kv: dict | None) -> list:
+        games = self._lan_visible_games_for_user(
+            user or self.user,
+            include_private=self._lan_search_includes_private(kv),
+            include_matched=self._lan_search_includes_matched(kv),
+        )
+        return [game for game in games if self._lan_game_matches_search(game, kv)]
+
+    def _lan_game_count(self, user: User | None = None, *, search_kv: dict | None = None) -> int:
+        if search_kv is not None:
+            return len(self._lan_games_for_search(user or self.user, search_kv))
         return len(self._lan_visible_games_for_user(user or self.user))
 
     def _lan_clear_stale_game_memberships(self, *, keep_game_id: int = 0, reason: str = ""):
@@ -1956,15 +2652,28 @@ class ClientHandler:
     def _lan_game_params(self, game, fallback: str = "") -> str:
         return getattr(game, "_lan_params", fallback or _LAN_DEFAULT_PARAMS)
 
+    def _lan_game_minsize(self, game, *, maxsize: int | None = None) -> int:
+        if maxsize is None:
+            maxsize = max(2, int(getattr(game, "limit", 4) or 4))
+        if self._lan_game_private(game) and not self._lan_game_secret(game):
+            return min(int(maxsize), 2)
+        raw = int(getattr(game, "_lan_minsize", getattr(game, "minsize", 2)) or 2)
+        minsize = max(1, min(int(maxsize), raw))
+        return max(1, minsize)
+
     def _lan_game_custflags(self, game, fallback: str = "0") -> str:
         return getattr(game, "_lan_custflags", fallback)
 
     def _lan_game_sysflags(self, game, fallback: str = "0", *, extra_bits: int = 0) -> str:
         raw = getattr(game, "_lan_sysflags", fallback)
         try:
-            value = int(str(raw or fallback).strip() or "0")
+            value = int(str(raw or fallback).strip() or "0", 0)
         except Exception:
             value = 0
+        if self._lan_game_secret(game):
+            value |= _LAN_PASSWORD_SYSFLAG
+        else:
+            value &= ~_LAN_PASSWORD_SYSFLAG
         if extra_bits:
             value |= int(extra_bits)
         return str(value)
@@ -1983,7 +2692,15 @@ class ClientHandler:
         value = str(store.get(int(uid), "")).strip()
         return value or self._lan_game_params(game)
 
-    def _lan_remember_game_player_params(self, game, uid: int, kv: dict, *, params: str = ""):
+    def _lan_remember_game_player_params(
+        self,
+        game,
+        uid: int,
+        kv: dict,
+        *,
+        params: str = "",
+        update_race_category: bool = False,
+    ):
         if game is None:
             return
         fallback = params or self._lan_game_params(game)
@@ -2019,10 +2736,13 @@ class ClientHandler:
         opp_store[int(uid)] = opp_value
         setattr(game, "_lan_player_partparams", part_store)
         setattr(game, "_lan_player_opparams", opp_store)
+        if update_race_category and int(uid) == int(getattr(game, "host_uid", 0) or 0):
+            self._lan_update_game_race_category(game, params=part_value or opp_value or fallback)
         log.info(
-            "[uid=%d] LAN gset params stored game=%d userpart=%d userparams=%s part=%s opp=%s keys=%s",
+            "[uid=%d] LAN gset params stored game=%d category=%d userpart=%d userparams=%s part=%s opp=%s keys=%s",
             int(uid),
             int(getattr(game, "id", 0) or 0),
+            self._lan_game_race_category(game),
             userpart,
             userparams or "-",
             part_value or "-",
@@ -2177,11 +2897,25 @@ class ClientHandler:
         return {
             "missing_identifier": "Account name is missing.",
             "missing_password": "Password is missing.",
+            "missing_fields": "Required login fields are missing.",
             "no_accounts": "No LAN auth accounts are configured.",
             "unknown_account": "Account is not recognized.",
+            "invalid_auth": "Authentication failed.",
             "bad_password": "Password is incorrect.",
             "rate_limited": "Too many failed login attempts.",
+            "server_full": "Server is full.",
             "account_in_use": "Account is already logged in.",
+            "account_locked": "Account is locked.",
+            "account_disabled": "Account is disabled.",
+            "admin_ban": "Account is banned.",
+            "blacklisted": "Account is blocked.",
+            "invalid_key": "CD key is invalid.",
+            "tos_not_accepted": "Terms of Service were not accepted.",
+            "share_not_accepted": "Share agreement was not accepted.",
+            "filtered": "Account name failed the text filter.",
+            "auth_timeout": "Authentication backend timed out.",
+            "database_error": "Authentication backend failed.",
+            "invalid_state": "Authentication backend rejected the current state.",
             "account_exists": "Account already exists.",
             "create_disabled": "Account creation is disabled.",
             "save_failed": "Account could not be saved.",
@@ -2197,9 +2931,68 @@ class ClientHandler:
 
     @staticmethod
     def _lan_auth_reject_reserved(reason: str) -> int:
-        if str(reason or "").strip() in ("bad_password", "missing_password"):
-            return _LAN_AUTH_PASS_RESERVED
-        return _LAN_AUTH_IMST_RESERVED
+        key = str(reason or "").strip().lower()
+        if key.startswith("auth") and len(key) == 8:
+            key = key[4:]
+        key = key.replace("-", "_").replace(" ", "_")
+        key = key.split(":", 1)[0]
+        return {
+            "imst": _LAN_AUTH_IMST_RESERVED,
+            "invalid_auth": _LAN_AUTH_IMST_RESERVED,
+            "unknown_account": _LAN_AUTH_IMST_RESERVED,
+            "missing_identifier": _LAN_AUTH_IMST_RESERVED,
+            "logn": _LAN_AUTH_LOGN_RESERVED,
+            "account_in_use": _LAN_AUTH_LOGN_RESERVED,
+            "already_logged_in": _LAN_AUTH_LOGN_RESERVED,
+            "already_online": _LAN_AUTH_LOGN_RESERVED,
+            "lock": _LAN_AUTH_LOCK_RESERVED,
+            "locked": _LAN_AUTH_LOCK_RESERVED,
+            "account_locked": _LAN_AUTH_LOCK_RESERVED,
+            "account_disabled": _LAN_AUTH_LOCK_RESERVED,
+            "disabled": _LAN_AUTH_LOCK_RESERVED,
+            "banned": _LAN_AUTH_BLAK_RESERVED,
+            "admin_ban": _LAN_AUTH_BLAK_RESERVED,
+            "rate_limited": _LAN_AUTH_LOCK_RESERVED,
+            "server_full": _LAN_AUTH_DBER_RESERVED,
+            "pass": _LAN_AUTH_PASS_RESERVED,
+            "bad_password": _LAN_AUTH_PASS_RESERVED,
+            "missing_password": _LAN_AUTH_PASS_RESERVED,
+            "password_error": _LAN_AUTH_PASS_RESERVED,
+            "ikey": _LAN_AUTH_IKEY_RESERVED,
+            "invalid_key": _LAN_AUTH_IKEY_RESERVED,
+            "bad_key": _LAN_AUTH_IKEY_RESERVED,
+            "invalid_cdkey": _LAN_AUTH_IKEY_RESERVED,
+            "invalid_cd_key": _LAN_AUTH_IKEY_RESERVED,
+            "tosa": _LAN_AUTH_TOSA_RESERVED,
+            "tos_not_accepted": _LAN_AUTH_TOSA_RESERVED,
+            "terms_not_accepted": _LAN_AUTH_TOSA_RESERVED,
+            "dber": _LAN_AUTH_DBER_RESERVED,
+            "database_error": _LAN_AUTH_DBER_RESERVED,
+            "backend_error": _LAN_AUTH_DBER_RESERVED,
+            "save_failed": _LAN_AUTH_DBER_RESERVED,
+            "no_accounts": _LAN_AUTH_DBER_RESERVED,
+            "blak": _LAN_AUTH_BLAK_RESERVED,
+            "blacklisted": _LAN_AUTH_BLAK_RESERVED,
+            "blacklist": _LAN_AUTH_BLAK_RESERVED,
+            "blocked": _LAN_AUTH_BLAK_RESERVED,
+            "shar": _LAN_AUTH_SHAR_RESERVED,
+            "share_not_accepted": _LAN_AUTH_SHAR_RESERVED,
+            "share_required": _LAN_AUTH_SHAR_RESERVED,
+            "miss": _LAN_AUTH_MISS_RESERVED,
+            "missing_fields": _LAN_AUTH_MISS_RESERVED,
+            "missing_required_fields": _LAN_AUTH_MISS_RESERVED,
+            "filt": _LAN_AUTH_FILT_RESERVED,
+            "filtered": _LAN_AUTH_FILT_RESERVED,
+            "filter_failed": _LAN_AUTH_FILT_RESERVED,
+            "profane": _LAN_AUTH_FILT_RESERVED,
+            "time": _LAN_AUTH_TIME_RESERVED,
+            "auth_timeout": _LAN_AUTH_TIME_RESERVED,
+            "timeout": _LAN_AUTH_TIME_RESERVED,
+            "backend_timeout": _LAN_AUTH_TIME_RESERVED,
+            "over": _LAN_AUTH_OVER_RESERVED,
+            "invalid_state": _LAN_AUTH_OVER_RESERVED,
+            "backend_over": _LAN_AUTH_OVER_RESERVED,
+        }.get(key, _LAN_AUTH_IMST_RESERVED)
 
     @staticmethod
     def _lan_account_create_reject_reserved(reason: str) -> int:
@@ -2324,6 +3117,15 @@ class ClientHandler:
         self._lan_close_after_auth_reject(self._lan_auth_reject_close_delay(repeat, interval))
 
     def _lan_accept_auth(self, kv: dict, fallback_name: str, fallback_persona: str, send_frame) -> bool:
+        if self.srv.is_user_banned(self.user):
+            identifier = self.user.name or fallback_name or "-"
+            self._lan_reject_auth(
+                send_frame,
+                "admin_ban",
+                identifier,
+                reserved_be32=_LAN_AUTH_BLAK_RESERVED,
+            )
+            return False
         auth_kv = dict(kv or {})
         sess, mask = self.srv.recent_lan_dir_challenge(self.user.ip)
         if not sess or not mask:
@@ -2335,6 +3137,14 @@ class ClientHandler:
         if ok:
             if account:
                 self._lan_apply_auth_account(account, fallback_name, fallback_persona)
+                if self.srv.is_user_banned(self.user):
+                    self._lan_reject_auth(
+                        send_frame,
+                        "admin_ban",
+                        self._probe_display_name or self.user.name or identifier,
+                        reserved_be32=_LAN_AUTH_BLAK_RESERVED,
+                    )
+                    return False
             account_name = self._probe_display_name or self.user.name or fallback_name
             conflict = self._lan_account_conflict(account_name)
             if conflict is not None:
@@ -2357,6 +3167,8 @@ class ClientHandler:
                 "auth",
             ):
                 return False
+            self.srv.ranking.get_or_create(self.user.uid, self.user.name)
+            self.srv.stats.get_player_stats(self._probe_persona or self.user.pers or fallback_persona, create=True)
             return True
         self._lan_reject_auth(
             send_frame,
@@ -2453,12 +3265,17 @@ class ClientHandler:
         return self._make_20922_signed_binary_message("pers", payload, 116)
 
     def _lan_user_frame(self) -> bytes:
+        persona = self._lan_persona()
+        try:
+            stat_csv = self.srv.stats.profile_stat_csv(persona)
+        except Exception:
+            stat_csv = "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,"
         payload = (
-            "LMSTAT=\n"
-            "STAT=0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,\n"
+            f"LMSTAT={stat_csv}\n"
+            f"STAT={stat_csv}\n"
             "LGAME=\n"
         ).encode("utf-8") + b"\x00"
-        return self._make_20922_signed_binary_message("user", payload, 106)
+        return self._make_20922_signed_binary_message("user", payload, len(payload) + 8)
 
     def _lan_player_stat_csv(self, persona: str) -> str:
         try:
@@ -2477,6 +3294,12 @@ class ClientHandler:
             return int(stat.get(0, "rep") if stat is not None else 100)
         except Exception:
             return 100
+
+    def _lan_player_summary_for_user(self, user: User) -> dict:
+        try:
+            return self.srv.stats.player_summary(self._lan_persona_for(user))
+        except Exception:
+            return {"rank": 9999, "wins": 0, "losses": 0, "disconnects": 0, "rep": 100}
 
     def _lan_cfg_int(self, key: str, default: int) -> int:
         try:
@@ -2536,6 +3359,39 @@ class ClientHandler:
         return int(chan or index or 1)
 
     @staticmethod
+    def _lan_snap_stats_board_id(board_id: int) -> int:
+        board_id = int(board_id or 1)
+        if 1 <= board_id <= 5:
+            return board_id
+        # The stock NFSU2 client asks the visible rankings through higher CHAN
+        # ids. 6-10 are the paged stats boards, and 12-16 are used for the
+        # matching FIND/$ request around the current persona.
+        if 6 <= board_id <= 10:
+            return board_id - 5
+        if board_id == 11:
+            return 5
+        if 12 <= board_id <= 16:
+            return board_id - 11
+        if board_id == 17:
+            return 5
+        return 0
+
+    def _lan_filter_snap_stat_rows(self, rows, find: str):
+        find_norm = str(find or "").strip().lower()
+        if not find_norm:
+            return rows
+        if find_norm == "$":
+            target = self._lan_persona().strip().lower()
+            if not target:
+                return rows
+            exact = [(rank, stat) for rank, stat in rows if stat.persona.strip().lower() == target]
+            return exact or rows
+        exact = [(rank, stat) for rank, stat in rows if stat.persona.strip().lower() == find_norm]
+        if exact:
+            return exact
+        return [(rank, stat) for rank, stat in rows if find_norm in stat.persona.strip().lower()]
+
+    @staticmethod
     def _lan_track_snap_value(persona: str, board_id: int) -> int:
         digest = md5(f"{board_id}:{persona}".encode("utf-8", errors="ignore")).digest()
         if 28 <= board_id <= 35:
@@ -2562,10 +3418,14 @@ class ClientHandler:
 
     def _lan_snap_burst(self, kv: dict) -> bytes:
         def as_int(name: str, default: int) -> int:
+            raw_value = str(kv.get(name, default) or default).strip()
             try:
-                return int(str(kv.get(name, default) or default).strip())
+                return int(raw_value)
             except Exception:
-                return default
+                try:
+                    return int(raw_value, 16)
+                except Exception:
+                    return default
 
         index = as_int("INDEX", 1)
         chan = as_int("CHAN", 0)
@@ -2573,34 +3433,33 @@ class ClientHandler:
         range_count = as_int("RANGE", 100)
         find = str(kv.get("FIND", "") or "").strip()
         board_id = self._lan_snap_board_id(index, chan)
-        frames = [
-            self._make_20922_tab_message(
-                "snap",
-                [
-                    f"INDEX={index}",
-                    f"CHAN={chan}",
-                    f"START={start}",
-                    f"RANGE={range_count}",
-                    "SEQN=0",
-                ],
-            )
-        ]
+        stats_board_id = self._lan_snap_stats_board_id(board_id)
+        high_channel_stats = bool(stats_board_id and board_id > 5)
+        row_frames = []
         rows_count = 0
-        if 1 <= board_id <= 5:
+        if stats_board_id:
+            stat_start = 0 if find else start
+            stat_limit = 100 if find else range_count
             rows = self.srv.stats.nfsu2_leaderboard(
-                board_id,
-                start=start,
-                limit=range_count,
+                stats_board_id,
+                start=stat_start,
+                limit=stat_limit,
                 include_personas=self._lan_stats_personas(),
             )
+            rows = self._lan_filter_snap_stat_rows(rows, find)
+            rows = rows[: max(1, min(100, int(range_count or 100)))]
             for rank, stat in rows:
                 rows_count += 1
-                frames.append(
+                row_frames.append(
                     self._make_20922_tab_message(
                         "+snp",
                         [
-                            f"P={max(0, rank - 1):x}",
-                            f"S={stat.snap_hex_csv(board_id, rank)}",
+                            (
+                                f"P={max(0, rank - 1):x},1,1"
+                                if high_channel_stats
+                                else f"P={max(0, rank - 1):x}"
+                            ),
+                            f"S={stat.full_hex_csv() if high_channel_stats else stat.snap_hex_csv(stats_board_id, rank)}",
                             f"N={stat.persona}",
                             "O=1",
                         ],
@@ -2609,7 +3468,7 @@ class ClientHandler:
         else:
             for value, persona in self._lan_track_snap_rows(board_id, start, range_count, find):
                 rows_count += 1
-                frames.append(
+                row_frames.append(
                     self._make_20922_tab_message(
                         "+snp",
                         [
@@ -2619,15 +3478,38 @@ class ClientHandler:
                         ],
                     )
                 )
+        frames = [
+            self._make_20922_tab_message(
+                "snap",
+                [
+                    f"INDEX={index}",
+                    f"CHAN={chan}",
+                    f"START={start}",
+                    f"RANGE={rows_count if high_channel_stats else range_count}",
+                    "SEQN=0",
+                    f"COUNT={rows_count}",
+                    f"TOTAL={rows_count}",
+                    "MORE=0",
+                ],
+            )
+        ]
+        frames.extend(row_frames)
+        try:
+            kv_text = " ".join(f"{key}={kv[key]}" for key in sorted(kv))[:400]
+        except Exception:
+            kv_text = ""
         log.info(
-            "[uid=%d] LAN stats snap index=%d chan=%d board=%d start=%d range=%d rows=%d",
+            "[uid=%d] LAN stats snap index=%d chan=%d board=%d stats_board=%d start=%d range=%d find=%r rows=%d keys=%s",
             self.user.uid,
             index,
             chan,
             board_id,
+            stats_board_id,
             start,
             range_count,
+            find,
             rows_count,
+            kv_text,
         )
         return b"".join(frames)
 
@@ -3051,6 +3933,7 @@ class ClientHandler:
         tunnel_addrs: bool = False,
     ):
         maxsize = max(2, int(game.limit or 4))
+        minsize = self._lan_game_minsize(game, maxsize=maxsize)
         host_snap = self._lan_host_snapshot(game)
         host_name = host_snap["persona"]
         game_name = game.custom or host_name
@@ -3076,10 +3959,11 @@ class ClientHandler:
             f"HOST={host_name}",
             f"ROOM={int(getattr(game, 'room_id', 0) or 0)}",
             f"MAXSIZE={maxsize}",
-            "MINSIZE=2",
+            f"MINSIZE={minsize}",
             f"COUNT={count}",
             f"CUSTFLAGS={custflags}",
             f"SYSFLAGS={sysflags}",
+            *self._lan_game_access_fields(game),
             "EVID=0",
             "EVGID=0",
             f"NUMPART={numpart}",
@@ -3177,6 +4061,7 @@ class ClientHandler:
         sysflags_extra: int = 0,
     ):
         maxsize = max(2, int(game.limit or 4))
+        minsize = self._lan_game_minsize(game, maxsize=maxsize)
         host_uid = int(getattr(game, "host_uid", 0) or 0)
         host_snap = self._lan_snapshot_for_uid(game, host_uid) or self._lan_host_snapshot(game)
         host_name = host_snap["persona"]
@@ -3203,10 +4088,11 @@ class ClientHandler:
             f"HOST={host_name}",
             f"ROOM={int(getattr(game, 'room_id', 0) or 0)}",
             f"MAXSIZE={maxsize}",
-            "MINSIZE=2",
+            f"MINSIZE={minsize}",
             f"COUNT={count}",
             f"CUSTFLAGS={self._lan_game_custflags(game)}",
             f"SYSFLAGS={self._lan_game_sysflags(game, extra_bits=sysflags_extra)}",
+            *self._lan_game_access_fields(game),
             "EVID=0",
             "EVGID=0",
             f"NUMPART={numpart}",
@@ -3259,6 +4145,7 @@ class ClientHandler:
         sysflags_extra: int = 0,
     ):
         maxsize = max(2, int(game.limit or 4))
+        minsize = self._lan_game_minsize(game, maxsize=maxsize)
         host_uid = int(getattr(game, "host_uid", 0) or 0)
         host_snap = self._lan_snapshot_for_uid(game, host_uid) or self._lan_host_snapshot(game)
         host_name = host_snap["persona"]
@@ -3270,16 +4157,10 @@ class ClientHandler:
         if host_uid and all(int(snap["uid"]) != host_uid for snap in participants):
             participants.insert(0, host_snap)
         if participants:
-            if viewer_uid is not None:
-                viewer_uid_int = int(viewer_uid)
-                participants.sort(
-                    key=lambda snap: (
-                        0 if int(snap["uid"]) == viewer_uid_int else 1,
-                        0 if int(snap["uid"]) == host_uid else 1,
-                    )
-                )
-            else:
-                participants.sort(key=lambda snap: 0 if int(snap["uid"]) == host_uid else 1)
+            # Race-start snapshots must keep the host in OPID0. The lobby can
+            # sometimes put the viewer first, but doing that in gsta produces
+            # HOST=<host> with OPID0=<viewer>, which breaks race entry.
+            participants.sort(key=lambda snap: 0 if int(snap["uid"]) == host_uid else 1)
         if not participants:
             participants.append(host_snap)
 
@@ -3299,10 +4180,11 @@ class ClientHandler:
             f"HOST={host_name}",
             f"ROOM={int(getattr(game, 'room_id', 0) or 0)}",
             f"MAXSIZE={maxsize}",
-            "MINSIZE=2",
+            f"MINSIZE={minsize}",
             f"COUNT={count}",
             f"CUSTFLAGS={custflags}",
             f"SYSFLAGS={sysflags}",
+            *self._lan_game_access_fields(game),
             "EVID=0",
             "EVGID=0",
             f"NUMPART={numpart}",
@@ -3392,6 +4274,13 @@ class ClientHandler:
         sprt = raw_sprt
         seed = int(getattr(user, "seed", 0) or 0) << 10
         sess = str(261 + int(getattr(user, "uid", 0) or 0))
+        summary = self._lan_player_summary_for_user(user)
+        wins = int(summary.get("wins", 0) or 0)
+        losses = int(summary.get("losses", 0) or 0)
+        disconnects = int(summary.get("disconnects", 0) or 0)
+        rep = int(summary.get("rep", 100) or 100)
+        play_count = max(int(getattr(user, "play", 0) or 0), wins + losses + disconnects)
+        level = max(0, min(99, 1 + (rep // 1000)))
         return [
             f"IDENT={int(user.uid)}",
             f"NAME={self._lan_display_name_for(user)}",
@@ -3403,7 +4292,7 @@ class ClientHandler:
             f"AUX={self._lan_aux_for(user)}",
             f"RGB={self._lan_user_rgb_for(user)}",
             "PING=2",
-            "PLAY=0",
+            f"PLAY={play_count}",
             f"SEED={seed}",
             f"FLAGS={flags}",
             f"SYNC={sync}",
@@ -3416,11 +4305,11 @@ class ClientHandler:
             "ATTR=",
             "HWFLAG=0",
             "HWMASK=0",
-            "LEVEL=0",
-            "MEDALS=0",
+            f"LEVEL={level}",
+            f"MEDALS={wins}",
             "LANG=EN",
             "FROM=US",
-            f"REP={self._lan_player_rep_for_user(user)}",
+            f"REP={rep}",
             "CRIT=",
             "SETS=",
             f"SESS={sess}",
@@ -3443,18 +4332,25 @@ class ClientHandler:
                 normalized_usr_fields.append(field)
         return normalized_usr_fields
 
-    def _lan_gam_fields(self, game, *, params: str, game_key: str = "69ae6723"):
+    def _lan_gam_fields(self, game, *, params: str, game_key: str = "69ae6723", custflags: str | None = None):
         host_user = self.srv.users.get(game.host_uid) if game.host_uid else None
         room_name = (
             game.custom
             or (self._lan_persona_for(host_user) if host_user is not None else self._lan_persona())
         ).replace(".", "%2e")
         count = max(1, len(game.participants))
+        maxsize = max(2, int(getattr(game, "limit", 4) or 4))
+        minsize = self._lan_game_minsize(game, maxsize=maxsize)
+        game_flags_default = int(float(getattr(game, "flags", 0) or 0))
+        custflags_value = self._lan_game_custflags(game, str(game_flags_default)) if custflags is None else custflags
+        custflags_int = self._metadata_flags_u32(custflags_value, game_flags_default)
+        custflags_hex = f"{custflags_int:x}"
         addr_map = self._lan_game_addr_map(game)
         fields = [
             f"IDENT={game.id}",
-            f"GAME={game.id},,40000f3,{room_name},{room_name},,,,4,2,{count},Result%20record%3a%20%25s%20vs%20%25s%20%40%20%25d,{params},{game_key},,1",
+            f"GAME={game.id},,{custflags_hex},{room_name},{room_name},,,,{maxsize},{minsize},{count},Result%20record%3a%20%25s%20vs%20%25s%20%40%20%25d,{params},{game_key},,1",
         ]
+        fields.extend(self._lan_game_access_fields(game))
         for idx, uid in enumerate(game.participants):
             user = self.srv.users.get(uid)
             if user is None:
@@ -3768,18 +4664,22 @@ class ClientHandler:
     def _lan_wrapped_evgi(self, outer_cmd4: str, game):
         return self._make_20922_wrapped_message(outer_cmd4, "EVGI", self._lan_evgi_fields(game))
 
-    def _lan_lobby_snapshot_for(self, viewer) -> bytes:
+    def _lan_lobby_snapshot_for(self, viewer, *, search_kv: dict | None = None) -> bytes:
         chunks = []
-        for game in self._lan_visible_games_for_user(viewer):
+        games = self._lan_games_for_search(viewer, search_kv) if search_kv is not None else self._lan_visible_games_for_user(viewer)
+        for game in games:
             params = self._lan_game_params(game)
+            viewer_in_game = int(getattr(viewer, "game", 0) or 0) == int(getattr(game, "id", 0) or 0)
+            custflags = self._lan_game_custflags(game) if viewer_in_game else self._lan_game_public_custflags(game)
+            sysflags = self._lan_game_sysflags(game) if viewer_in_game else self._lan_game_public_sysflags(game)
             base_fields = self._lan_game_reply_fields(
                 game,
                 params=params,
-                custflags=self._lan_game_custflags(game),
-                sysflags=self._lan_game_sysflags(game),
-                tunnel_addrs=(viewer.game == game.id),
+                custflags=custflags,
+                sysflags=sysflags,
+                tunnel_addrs=viewer_in_game,
             )
-            if viewer.game == game.id:
+            if viewer_in_game:
                 chunks.append(self._make_20922_tab_message("+mgm", base_fields))
                 chunks.append(
                     self._make_20922_tab_message(
@@ -3796,13 +4696,22 @@ class ClientHandler:
                 chunks.append(self._make_20922_tab_message("+gam", base_fields))
         return b"".join(chunks)
 
-    def _send_later_lobby_snapshot(self, handler, delay_s: float, *, label: str = "lobby-snapshot"):
+    def _send_later_lobby_snapshot(
+        self,
+        handler,
+        delay_s: float,
+        *,
+        label: str = "lobby-snapshot",
+        search_kv: dict | None = None,
+    ):
+        search_kv_copy = dict(search_kv or {}) if search_kv is not None else None
+
         def _job():
             if not handler.user.connected or not handler.srv.is_running:
                 return
             if int(getattr(handler.user, "game", 0) or 0) > 0 or str(getattr(handler.user, "stat", "") or "") == STAT_GAME:
                 return
-            burst = handler._lan_lobby_snapshot_for(handler.user)
+            burst = handler._lan_lobby_snapshot_for(handler.user, search_kv=search_kv_copy)
             if not burst:
                 return
             handler._send_bootstrap_bytes(burst, label=label)
@@ -3825,15 +4734,16 @@ class ClientHandler:
                 continue
             if exclude_uid is not None and int(handler.user.uid) == int(exclude_uid):
                 continue
-            burst = handler._lan_lobby_snapshot_for(handler.user)
+            search_kv = getattr(handler, "_lan_last_gsea_kv", None)
+            burst = handler._lan_lobby_snapshot_for(handler.user, search_kv=search_kv)
             if burst:
-                self._send_later_lobby_snapshot(handler, delay_s, label="lobby-snapshot")
-            if with_gcm and handler._lan_game_count(handler.user):
+                self._send_later_lobby_snapshot(handler, delay_s, label="lobby-snapshot", search_kv=search_kv)
+            if with_gcm and handler._lan_game_count(handler.user, search_kv=search_kv):
                 handler._send_later_bytes(
                     delay_s + 0.02,
                     handler._lan_gcm_burst(gcr=1),
                     label="lobby-gcm",
-                    should_send=lambda handler=handler: handler._lan_game_count(handler.user) > 0,
+                    should_send=lambda handler=handler, search_kv=search_kv: handler._lan_game_count(handler.user, search_kv=search_kv) > 0,
                 )
 
     def _lan_emit_game_leave_reset(self, handler, game, *, delay_s: float = 0.02, self_leave: bool = False):
@@ -4404,6 +5314,15 @@ class ClientHandler:
                 self.user.name = name
                 persona = self._probe_persona or name
                 self._probe_persona = persona
+                if not self._server_accepts_new_user():
+                    self._lan_reject_auth(
+                        self._send_probe_echo,
+                        "server_full",
+                        name,
+                        reserved_be32=_LAN_AUTH_DBER_RESERVED,
+                    )
+                    decoded += 1
+                    continue
                 if not self._lan_accept_auth(kv, name, persona, self._send_probe_echo):
                     decoded += 1
                     continue
@@ -4453,12 +5372,12 @@ class ClientHandler:
                 continue
             if cmd in ("pers", "cper"):
                 requested = kv.get("PERS", "").strip() or self._probe_persona or self._probe_display_name
-                self._probe_persona = requested
-                self.user.pers = requested
                 display_name = self._probe_display_name or self.user.name or requested
                 if not self._lan_claim_persona_or_reject(requested, self._send_probe_echo, cmd):
                     decoded += 1
                     continue
+                self._probe_persona = requested
+                self.user.pers = requested
                 self.srv.remember_control_profile(
                     name=display_name,
                     persona=requested,
@@ -4521,21 +5440,23 @@ class ClientHandler:
                 continue
             if cmd == "gsea":
                 self._probe_gsea_seen += 1
+                self._lan_last_gsea_kv = dict(kv)
+                visible_game_count = self._lan_game_count(self.user, search_kv=kv)
                 frames = [
-                    self._make_20922_tab_message("gsea", [f"COUNT={self._lan_game_count(self.user)}"]),
+                    self._make_20922_tab_message("gsea", [f"COUNT={visible_game_count}"]),
                 ]
-                if self._probe_gsea_seen >= 2 or self._lan_game_count(self.user):
+                if self._probe_gsea_seen >= 2 or visible_game_count:
                     frames.append(
                             self._make_20922_tab_message(
                                 "+sst",
-                                self._lan_sst_presence_fields(gcr=1 if self._lan_game_count(self.user) else 0),
+                                self._lan_sst_presence_fields(gcr=1 if visible_game_count else 0),
                             )
                         )
                 self._send_probe_echo(b"".join(frames))
                 log.info(
                     "[uid=%d] LAN bootstrap prelogin cmd=gsea replied count=%d pass=%d",
                     self.user.uid,
-                    self._lan_game_count(self.user),
+                    visible_game_count,
                     self._probe_gsea_seen,
                 )
                 decoded += 1
@@ -4543,18 +5464,34 @@ class ClientHandler:
             if cmd == "gcre":
                 room_name = kv.get("NAME", "").strip() or f"007.{self._lan_display_name()}"
                 params = self._lan_normalize_params(kv.get("PARAMS", "").strip())
-                custflags = kv.get("CUSTFLAGS", "0").strip()
-                sysflags = kv.get("SYSFLAGS", "0").strip()
-                try:
-                    limit = max(2, min(8, int(kv.get("MAXSIZE", "4") or "4")))
-                except Exception:
-                    limit = 4
-                game = self.srv.games.create(room_id=0, host_uid=self.user.uid, limit=limit, custom=room_name)
+                meta = self._room_game_meta_from_fields(kv, default_limit=4)
+                custflags = str(meta["custflags"])
+                sysflags = str(meta["sysflags"])
+                game = self.srv.games.create(
+                    room_id=0,
+                    host_uid=self.user.uid,
+                    limit=int(meta["limit"]),
+                    game_type=str(meta["type"]),
+                    flags=float(self._metadata_flags_int(custflags)),
+                    secret=str(meta["secret"]),
+                    custom=room_name,
+                    minsize=int(meta["minsize"]),
+                    private=bool(meta["private"]),
+                    matched=bool(meta["matched"]),
+                )
                 if game is None:
                     game = self.srv.games.get(self.user.game) if self.user.game else None
                 if game is not None:
                     self.srv.udp_relay_reset_room(int(game.id), preserve_recent=False)
                     self.srv.games.join(game.id, self.user.uid)
+                    setattr(game, "_lan_params", params)
+                    setattr(game, "_lan_custflags", custflags)
+                    setattr(game, "_lan_sysflags", sysflags)
+                    self._apply_lan_game_metadata(game, meta)
+                    custflags = self._lan_game_custflags(game)
+                    sysflags = self._lan_game_sysflags(game)
+                    self._lan_update_game_race_category(game, params=params)
+                    custflags = self._lan_game_custflags(game)
                     self.user.game = game.id
                 burst = b"".join(
                     (
@@ -4785,9 +5722,86 @@ class ClientHandler:
             break
         return consumed
 
+    def _handle_plain_lan_preauth_frame(self, cmd: str, kv: dict, tail: bytes) -> bool:
+        if cmd == "addr":
+            self._probe_client_addr = kv.get("ADDR", self._probe_client_addr)
+            self._probe_client_port = kv.get("PORT", self._probe_client_port)
+            self.user.laddr = self._probe_client_addr or self.user.laddr
+            try:
+                self.user.sprt = int(self._probe_client_port or self.user.sprt or 0)
+            except Exception:
+                pass
+            log.info(
+                "[uid=%d] LAN bootstrap plaintext cmd=%s addr=%s port=%s tail=%s",
+                self.user.uid,
+                cmd,
+                self._probe_client_addr or "-",
+                self._probe_client_port or "-",
+                tail[:16].hex(),
+            )
+            frame = self._make_20922_signed_binary_message("addr", b"\x00", 9)
+            if self._lan_prelogin_burst_after_news_enabled():
+                self._probe_deferred_addr_frame = frame
+                log.info("[uid=%d] LAN bootstrap plaintext cmd=%s deferred addr len=%d", self.user.uid, cmd, len(frame))
+                return True
+            self._send_bootstrap_bytes(frame)
+            log.info("[uid=%d] LAN bootstrap plaintext cmd=%s replied addr len=%d", self.user.uid, cmd, len(frame))
+            return True
+
+        if cmd == "skey":
+            log.info(
+                "[uid=%d] LAN bootstrap plaintext cmd=%s tail=%s keys=%s",
+                self.user.uid,
+                cmd,
+                tail[:16].hex(),
+                ",".join(sorted(kv.keys())) if kv else "-",
+            )
+            frame = self._make_20922_signed_binary_message("skey", b"\x00", 9)
+            if self._lan_prelogin_burst_after_news_enabled():
+                self._probe_deferred_skey_frame = frame
+                log.info("[uid=%d] LAN bootstrap plaintext cmd=%s deferred skey len=%d", self.user.uid, cmd, len(frame))
+                return True
+            self._send_bootstrap_bytes(frame)
+            log.info("[uid=%d] LAN bootstrap plaintext cmd=%s replied skey len=%d", self.user.uid, cmd, len(frame))
+            return True
+
+        if cmd == "news":
+            frame = self._lan_news_with_endpoint_advertisement()
+            burst = b""
+            if self._lan_prelogin_burst_after_news_enabled():
+                burst = self._probe_deferred_addr_frame + self._probe_deferred_skey_frame
+                self._probe_deferred_addr_frame = b""
+                self._probe_deferred_skey_frame = b""
+            self._send_bootstrap_bytes(burst + frame)
+            log.info(
+                "[uid=%d] LAN bootstrap plaintext cmd=%s replied prelogin_burst=%d news len=%d",
+                self.user.uid,
+                cmd,
+                len(burst),
+                len(frame),
+            )
+            return True
+
+        if cmd == "~png":
+            log.info(
+                "[uid=%d] LAN bootstrap plaintext cmd=%s ref=%s",
+                self.user.uid,
+                cmd,
+                kv.get("REF", "-"),
+            )
+            self._schedule_lan_news_auth_followups()
+            return True
+
+        if cmd == "sele":
+            self._probe_seen_sele = True
+            frame = self._lan_sele_frame()
+            self._send_bootstrap_bytes(frame)
+            log.info("[uid=%d] LAN bootstrap plaintext cmd=sele replied sele len=%d", self.user.uid, len(frame))
+            return True
+
+        return False
+
     def _handle_plain_prelogin_frame(self, cmd: str, payload: bytes, reserved_be32: int = 0):
-        if not self._ensure_registered_user():
-            return
         body = payload
         kv = self._parse_20922_kv(body)
         self._lan_trace_incoming_frame(cmd, kv, reserved_be32=reserved_be32)
@@ -4795,6 +5809,22 @@ class ClientHandler:
         nul = body.find(b"\x00")
         if nul >= 0 and (nul + 1) < len(body):
             tail = body[nul + 1 :]
+
+        if self._handle_plain_lan_preauth_frame(cmd, kv, tail):
+            return
+
+        if not self._ensure_registered_user():
+            if cmd == "auth":
+                reason = "admin_ban" if self._disconnect_reason == "admin_ban" else "server_full"
+                reserved = _LAN_AUTH_BLAK_RESERVED if reason == "admin_ban" else _LAN_AUTH_DBER_RESERVED
+                identifier = kv.get("NAME", "").strip() or self._probe_display_name or self.user.name
+                self._lan_reject_auth(
+                    self._send_bootstrap_bytes,
+                    reason,
+                    identifier,
+                    reserved_be32=reserved,
+                )
+            return
 
         if cmd == "*con":
             self._send_bootstrap_bytes(self._make_20922_tab_message("*con", []))
@@ -4972,6 +6002,14 @@ class ClientHandler:
             self.user.name = name
             persona = self._probe_persona or name
             self._probe_persona = persona
+            if not self._server_accepts_new_user():
+                self._lan_reject_auth(
+                    self._send_bootstrap_bytes,
+                    "server_full",
+                    name,
+                    reserved_be32=_LAN_AUTH_DBER_RESERVED,
+                )
+                return
             if not self._lan_accept_auth(kv, name, persona, self._send_bootstrap_bytes):
                 return
             name = self._probe_display_name or name
@@ -5076,6 +6114,7 @@ class ClientHandler:
         if cmd in ("auxi", "AUXI"):
             self._probe_aux_text = kv.get("TEXT", "").strip()
             self.user.aux = self._probe_aux_text
+            auxi_game_id = int(self.user.game or 0)
             if reserved_be32:
                 burst = self._make_token_tab_reply(reserved_be32, [f"TEXT={self._probe_aux_text}"])
                 later = self._make_20922_tab_message("+usr", self._lan_usr_fields(sync=2, game_id=self.user.game))
@@ -5086,7 +6125,12 @@ class ClientHandler:
                     self._lan_who_fields(aux_text=self._probe_aux_text, game_active=bool(self.user.game)),
                 )
             self._send_bootstrap_bytes(burst)
-            self._send_later_bytes(0.04, later, label=f"{cmd.lower()}-followup")
+            self._send_later_bytes(
+                0.04,
+                later,
+                label=f"{cmd.lower()}-followup",
+                should_send=lambda game_id=auxi_game_id: int(self.user.game or 0) == game_id,
+            )
             log.info("[uid=%d] LAN bootstrap plaintext cmd=%s replied len=%d", self.user.uid, cmd, len(burst))
             return
 
@@ -5099,7 +6143,8 @@ class ClientHandler:
             self._cleanup_replaced_detached_users()
             postrace_removed_game = self._lan_finalize_reattached_active_game_for_lobby(reason="gsea")
             self._probe_gsea_seen += 1
-            visible_game_count = self._lan_game_count(self.user)
+            self._lan_last_gsea_kv = dict(kv)
+            visible_game_count = self._lan_game_count(self.user, search_kv=kv)
             frames = [
                 self._make_20922_tab_message("gsea", [f"COUNT={visible_game_count}"]),
             ]
@@ -5126,14 +6171,14 @@ class ClientHandler:
             self._send_bootstrap_bytes(immediate)
             if visible_game_count:
                 if not rearm_burst:
-                    snapshot = self._lan_lobby_snapshot_for(self.user)
+                    snapshot = self._lan_lobby_snapshot_for(self.user, search_kv=kv)
                     if snapshot:
-                        self._send_later_lobby_snapshot(self, 0.04, label="gsea-snapshot")
+                        self._send_later_lobby_snapshot(self, 0.04, label="gsea-snapshot", search_kv=kv)
                     self._send_later_bytes(
                         0.06,
                         self._lan_gcm_burst(gcr=1),
                         label="gsea-gcm",
-                        should_send=lambda: self._lan_game_count(self.user) > 0,
+                        should_send=lambda kv=dict(kv): self._lan_game_count(self.user, search_kv=kv) > 0,
                     )
             elif len(frames) == 1:
                 self._send_later_bytes(
@@ -5158,12 +6203,9 @@ class ClientHandler:
             self._cleanup_replaced_detached_users()
             room_name = kv.get("NAME", "").strip() or f"007.{self._lan_display_name()}"
             params = self._lan_normalize_params(kv.get("PARAMS", "").strip())
-            custflags = kv.get("CUSTFLAGS", "0").strip()
-            sysflags = kv.get("SYSFLAGS", "0").strip()
-            try:
-                limit = max(2, min(8, int(kv.get("MAXSIZE", "4") or "4")))
-            except Exception:
-                limit = 4
+            meta = self._room_game_meta_from_fields(kv, default_limit=4)
+            custflags = str(meta["custflags"])
+            sysflags = str(meta["sysflags"])
             existing_game = self.srv.games.get(self.user.game) if self.user.game else None
             existing_name = str(getattr(existing_game, "custom", "") or "").strip() if existing_game is not None else ""
             reuse_existing = bool(
@@ -5174,9 +6216,27 @@ class ClientHandler:
             )
             if reuse_existing:
                 game = existing_game
-                params = self._lan_game_params(game)
-                custflags = str(getattr(game, "_lan_custflags", custflags) or custflags)
-                sysflags = str(getattr(game, "_lan_sysflags", sysflags) or sysflags)
+                if not kv.get("PARAMS", "").strip():
+                    params = self._lan_game_params(game)
+                if not any(key in kv for key in ("MAXSIZE", "LIMIT")):
+                    meta["limit"] = int(getattr(game, "limit", meta["limit"]) or meta["limit"])
+                if not any(key in kv for key in ("MINSIZE", "MIN")):
+                    meta["minsize"] = int(getattr(game, "_lan_minsize", getattr(game, "minsize", meta["minsize"])) or meta["minsize"])
+                if not any(key in kv for key in ("CUSTFLAGS", "FLAGS")):
+                    meta["custflags"] = str(getattr(game, "_lan_custflags", meta["custflags"]) or meta["custflags"])
+                    custflags = str(meta["custflags"])
+                if "SYSFLAGS" not in kv:
+                    meta["sysflags"] = str(getattr(game, "_lan_sysflags", meta["sysflags"]) or meta["sysflags"])
+                    sysflags = str(meta["sysflags"])
+                if not any(key in kv for key in ("PASS", "PASSWORD", "SECRET", "ROOMPASS", "PWD")):
+                    meta["secret"] = self._lan_game_secret(game)
+                if not any(key in kv for key in ("PRIVATE", "PRIV", "HIDDEN", "TYPE", "KIND", "ROOMTYPE")):
+                    meta["private"] = self._lan_game_private(game)
+                    meta["type"] = str(getattr(game, "_lan_type", getattr(game, "type", meta["type"])) or meta["type"])
+                if not any(key in kv for key in ("MATCHED", "MATCH", "RANKED", "TYPE", "KIND", "ROOMTYPE")):
+                    meta["matched"] = self._lan_game_matched(game)
+                if not any(key in kv for key in ("RANKED", "RANK", "TYPE", "KIND", "ROOMTYPE")):
+                    meta["ranked"] = self._lan_game_ranked(game)
                 log.info(
                     "[uid=%d] LAN bootstrap duplicate gcre preserved existing game=%d requested_name=%s current_name=%s",
                     self.user.uid,
@@ -5186,7 +6246,18 @@ class ClientHandler:
                 )
             else:
                 self._lan_clear_stale_game_memberships(reason="gcre")
-                game = self.srv.games.create(room_id=0, host_uid=self.user.uid, limit=limit, custom=room_name)
+                game = self.srv.games.create(
+                    room_id=0,
+                    host_uid=self.user.uid,
+                    limit=int(meta["limit"]),
+                    game_type=str(meta["type"]),
+                    flags=float(self._metadata_flags_int(custflags)),
+                    secret=str(meta["secret"]),
+                    custom=room_name,
+                    minsize=int(meta["minsize"]),
+                    private=bool(meta["private"]),
+                    matched=bool(meta["matched"]),
+                )
                 if game is None:
                     game = self.srv.games.get(self.user.game) if self.user.game else None
             if game is not None:
@@ -5203,6 +6274,11 @@ class ClientHandler:
                 setattr(game, "_lan_params", params)
                 setattr(game, "_lan_custflags", custflags)
                 setattr(game, "_lan_sysflags", sysflags)
+                self._apply_lan_game_metadata(game, meta)
+                custflags = self._lan_game_custflags(game)
+                sysflags = self._lan_game_sysflags(game)
+                self._lan_update_game_race_category(game, params=params)
+                custflags = self._lan_game_custflags(game)
                 self._lan_remember_game_player_params(game, int(self.user.uid), kv, params=params)
                 game_fields = self._lan_game_reply_fields(
                     game,
@@ -5272,7 +6348,7 @@ class ClientHandler:
             joined_user = self.srv.users.get(call_uid) if call_uid else None
             if game is not None and joined_user is not None:
                 if int(joined_user.uid) not in [int(uid) for uid in (getattr(game, "participants", []) or [])]:
-                    self.srv.games.join(game.id, joined_user.uid)
+                    self.srv.games.join(game.id, joined_user.uid, self._lan_game_secret(game))
                 joined_user.game = game.id
                 joined_user.stat = STAT_GAME
                 game.set_ready(joined_user.uid, False)
@@ -5325,8 +6401,10 @@ class ClientHandler:
                         getattr(self, "_lan_pending_invite_from", "") or "-",
                         getattr(self, "_lan_pending_invite_name", "") or "-",
                     )
-            if game is not None:
-                self._lan_clear_stale_game_memberships(keep_game_id=int(game.id), reason="gjoi")
+            invited_join = bool(
+                game is not None
+                and int(getattr(self, "_lan_pending_invite_game_id", 0) or 0) == int(getattr(game, "id", 0) or 0)
+            )
             if (
                 game is not None
                 and int(self.user.uid) in (getattr(game, "kicked_uids", set()) or set())
@@ -5339,17 +6417,37 @@ class ClientHandler:
                     int(getattr(game, "id", 0) or 0),
                 )
             if game is not None and int(self.user.uid) in (getattr(game, "kicked_uids", set()) or set()):
-                burst = self._make_20922_tab_message("gjoi", [])
+                burst = self._lan_gjoi_reject_frame("kick")
                 self._send_bootstrap_bytes(burst)
                 log.info(
-                    "[uid=%d] LAN bootstrap plaintext cmd=gjoi blocked-kicked ident=%d name=%s game=%d",
+                    "[uid=%d] LAN bootstrap plaintext cmd=gjoi blocked-kicked ident=%d name=%s game=%d status=%08x",
                     self.user.uid,
                     ident,
                     name or "-",
                     int(getattr(game, "id", 0) or 0),
+                    self._lan_gjoi_reject_reserved("kick") & 0xFFFFFFFF,
                 )
                 return
-            if game is not None and self.srv.games.join(game.id, self.user.uid):
+            if game is not None:
+                allowed, deny_reason = self._lan_game_join_allowed(game, kv, invited=invited_join)
+                if not allowed:
+                    burst = self._lan_gjoi_reject_frame(deny_reason)
+                    self._send_bootstrap_bytes(burst)
+                    log.info(
+                        "[uid=%d] LAN bootstrap plaintext cmd=gjoi blocked-%s ident=%d name=%s game=%d private=%d matched=%d haspass=%d status=%08x",
+                        self.user.uid,
+                        deny_reason,
+                        ident,
+                        name or "-",
+                        int(getattr(game, "id", 0) or 0),
+                        1 if self._lan_game_private(game) else 0,
+                        1 if self._lan_game_matched(game) else 0,
+                        1 if self._lan_game_secret(game) else 0,
+                        self._lan_gjoi_reject_reserved(deny_reason) & 0xFFFFFFFF,
+                    )
+                    return
+                self._lan_clear_stale_game_memberships(keep_game_id=int(game.id), reason="gjoi")
+            if game is not None and self.srv.games.join(game.id, self.user.uid, self._lan_join_secret_from_fields(kv)):
                 game.set_ready(self.user.uid, False)
                 self._lan_remember_game_user(game, self.user)
                 self.user.game = game.id
@@ -5357,8 +6455,6 @@ class ClientHandler:
                 self._lan_pending_invite_game_id = 0
                 self._lan_pending_invite_from = ""
                 self._lan_pending_invite_name = ""
-                if params:
-                    setattr(game, "_lan_params", params)
                 self._lan_remember_game_player_params(game, int(self.user.uid), kv, params=params)
                 burst = self._make_20922_tab_message(
                     "gjoi",
@@ -5909,7 +7005,12 @@ class ClientHandler:
             if game is not None:
                 if not duplicate_gset and not callback_for_other:
                     game.set_ready(state_user.uid, ready)
-                    self._lan_remember_game_player_params(game, int(state_user.uid), kv)
+                    self._lan_remember_game_player_params(
+                        game,
+                        int(state_user.uid),
+                        kv,
+                        update_race_category=True,
+                    )
                     if ready:
                         self._lan_last_ready_at = time.time()
                 ready_count = len(getattr(game, "ready_participants", set()) or set())
@@ -6112,7 +7213,6 @@ class ClientHandler:
             burst = self._make_20922_binary_message("gsta", gsta_payload)
             self._send_bootstrap_bytes(burst)
             if game is not None:
-                setattr(game, "_lan_sysflags", "524288")
                 should_start_game = getattr(game, "started_at", None) is None
                 if should_start_game:
                     setattr(game, "_lan_seed", int(time.time()) & 0xFFFFFFFF)
@@ -6123,7 +7223,6 @@ class ClientHandler:
                         game,
                         viewer_uid=viewer_uid,
                         tunnel_addrs=True,
-                        sysflags_extra=0x80000,
                     )
                     session_fields = list(start_fields)
                     seed = int(getattr(game, "_lan_seed", 11572858))
@@ -6374,6 +7473,11 @@ class ClientHandler:
         self.user.send("+PING\n")
 
     def _cmd_login(self, fields):
+        if not self._server_accepts_new_user():
+            self._disconnect_reason = "server_full"
+            self.user.send(encode_error("LOGIN", 503, "Server full"))
+            self.user.connected = False
+            return
         name = str(fields.get("NAME", f"Player{self.user.uid}"))
         pers = str(fields.get("PERS", name))
         lang = str(fields.get("LANG", "en"))
@@ -6390,8 +7494,14 @@ class ClientHandler:
             self.srv.users.register_hw(self.user, hw, mac)
 
         if not self._ensure_registered_user():
-            self.user.send(encode_error("LOGIN", 503, "Server full"))
+            if self._disconnect_reason == "admin_ban":
+                self.user.send(encode_error("LOGIN", 403, "Banned"))
+            else:
+                self.user.send(encode_error("LOGIN", 503, "Server full"))
+            self.user.connected = False
             return
+        self.srv.ranking.get_or_create(self.user.uid, self.user.name)
+        self.srv.stats.get_player_stats(self.user.pers or self.user.name, create=True)
         conflict = self._lan_persona_conflict(pers)
         if conflict is not None:
             log.warning(
@@ -6464,12 +7574,12 @@ class ClientHandler:
             self._send_kv("SLOTS", 4)
 
             if self.user.rooms_filter["ROOMS"] > 0:
-                rooms = self.srv.rooms.list_rooms()
+                rooms = self.srv.rooms.visible_rooms_for(self.user.uid)
                 for r in rooms:
                     self.user.send(encode_room_record(r.to_dict()))
             return
 
-        rooms = self.srv.rooms.list_rooms()
+        rooms = self.srv.rooms.visible_rooms_for(self.user.uid)
         for r in rooms:
             self.user.send(encode_room_record(r.to_dict()))
         self.user.send(f"+ROOMS COUNT={len(rooms)}\n")
@@ -6480,20 +7590,31 @@ class ClientHandler:
         name     = str(fields.get("NAME", ""))
         maxsize  = int(fields.get("MAXSIZE", 8))
         minsize  = int(fields.get("MINSIZE", 2))
-        custflags= int(fields.get("CUSTFLAGS", 0))
+        meta = self._room_game_meta_from_fields(fields, default_limit=maxsize)
+        custflags = self._metadata_flags_int(meta["custflags"])
+        sysflags = self._metadata_flags_int(meta["sysflags"])
+        secret = self._lan_join_secret_from_fields(fields)
 
         if room_id:
             # Join existing
-            ok = self.srv.rooms.join(room_id, self.user.uid)
+            ok = self.srv.rooms.join(room_id, self.user.uid, secret)
             if not ok:
-                self.user.send(encode_error("ROOM", 403, "Room full or not found"))
+                self.user.send(encode_error("ROOM", 403, "Room full, private, passworded, or not found"))
                 return
             room = self.srv.rooms.get(room_id)
         else:
             # Create new
             room = self.srv.rooms.create(
                 name or f"{self.user.name}'s Room",
-                self.user.uid, maxsize, minsize, custflags
+                self.user.uid,
+                int(meta["limit"]),
+                int(meta["minsize"]),
+                custflags,
+                sysflags,
+                secret=str(meta["secret"]),
+                private=bool(meta["private"]),
+                matched=bool(meta["matched"]),
+                room_type=str(meta["type"]),
             )
             if not room:
                 self.user.send(encode_error("ROOM", 503, "Cannot create room"))
@@ -6527,9 +7648,9 @@ class ClientHandler:
             return
         if self.user.room and self.user.room != room_id:
             self.srv.rooms.leave(self.user.room, self.user.uid)
-        ok = self.srv.rooms.join(room_id, self.user.uid)
+        ok = self.srv.rooms.join(room_id, self.user.uid, self._lan_join_secret_from_fields(fields))
         if not ok:
-            self.user.send(encode_error("MOVE", 403, "Room full"))
+            self.user.send(encode_error("MOVE", 403, "Room full, private, passworded, or not found"))
             return
         self.user.room = room_id
         self.user.stat = STAT_ROOM
@@ -6639,6 +7760,13 @@ class ClientHandler:
     def _cmd_games(self, fields):
         room_id = fields.get("ROOM", self.user.room)
         games   = self.srv.games.list_games(room_id if room_id else None)
+        uid = int(self.user.uid)
+        games = [
+            game for game in games
+            if uid == int(getattr(game, "host_uid", 0) or 0)
+            or uid in {int(part_uid) for part_uid in (getattr(game, "participants", []) or [])}
+            or not (bool(getattr(game, "private", False)) or bool(getattr(game, "matched", False)))
+        ]
         for g in games:
             self.user.send(encode_game_record(g.to_dict()))
         self.user.send(f"+GAMES COUNT={len(games)}\n")
@@ -6650,6 +7778,10 @@ class ClientHandler:
         secret  = str(fields.get("SECRET", ""))
         custom  = str(fields.get("CUSTOM", ""))
         fmt     = str(fields.get("FORMAT", ""))
+        meta = self._room_game_meta_from_fields(fields, default_limit=limit)
+        limit = int(meta["limit"])
+        secret = secret or str(meta["secret"])
+        gtype = str(meta["type"] or gtype)
 
         # PlayModuleGameCreateFilter
         if not self.srv.play.game_create_filter(self.user.uid, fields):
@@ -6661,13 +7793,16 @@ class ClientHandler:
             host_uid=self.user.uid,
             limit=limit, game_type=gtype,
             flags=flags, secret=secret,
-            custom=custom, fmt=fmt
+            custom=custom, fmt=fmt,
+            minsize=int(meta["minsize"]),
+            private=bool(meta["private"]),
+            matched=bool(meta["matched"]),
         )
         if not game:
             self.user.send(encode_error("NEWGAME", 503, "Cannot create game"))
             return
 
-        self.srv.games.join(game.id, self.user.uid)
+        self.srv.games.join(game.id, self.user.uid, secret)
         self.user.game = game.id
         self.user.stat = STAT_GAME
         self.user.send(encode_game_record(game.to_dict()))
@@ -6682,14 +7817,22 @@ class ClientHandler:
             self.user.send(encode_error("JOINGAME", 403, "Cannot join game"))
             return
 
-        ok = self.srv.games.join(game_id, self.user.uid)
+        game = self.srv.games.get(game_id)
+        supplied_secret = self._lan_join_secret_from_fields(fields)
+        if game is not None and getattr(game, "secret", "") and supplied_secret != str(getattr(game, "secret", "") or ""):
+            self.user.send(encode_error("JOINGAME", 403, "Bad or missing game password"))
+            return
+        if game is not None and (getattr(game, "private", False) or getattr(game, "matched", False)) and self.user.uid not in getattr(game, "participants", []):
+            if not (getattr(game, "private", False) and getattr(game, "secret", "") and supplied_secret == str(getattr(game, "secret", "") or "")):
+                self.user.send(encode_error("JOINGAME", 403, "Private or matched game"))
+                return
+        ok = self.srv.games.join(game_id, self.user.uid, supplied_secret)
         if not ok:
             self.user.send(encode_error("JOINGAME", 403, "Game full or not found"))
             return
 
         self.user.game = game_id
         self.user.stat = STAT_GAME
-        game = self.srv.games.get(game_id)
         self.user.send(encode_game_record(game.to_dict()))
 
     def _cmd_leave_game(self, fields):
@@ -6731,16 +7874,14 @@ class ClientHandler:
 
         # Parse results for each participant
         results = {}
-        race_category = 0
-        for race_key in ("RACETYPE", "TYPE", "MODE"):
-            if race_key in fields:
-                try:
-                    race_category = max(0, min(4, int(fields.get(race_key, 0)) + 1))
-                except Exception:
-                    race_category = 0
-                break
+        race_category = self._lan_game_race_category(game, fields)
+        participant_personas = {}
         for uid in game.participants:
-            outcome = str(fields.get(f"USER{uid}_OUTCOME", "LOSS"))
+            participant = self.srv.users.get(uid)
+            if participant is not None:
+                participant_personas[int(uid)] = self._lan_persona_for(participant)
+        for uid in game.participants:
+            outcome = str(fields.get(f"USER{uid}_OUTCOME", "LOSS")).strip().upper()
             score_d = float(fields.get(f"USER{uid}_SCORE", 0.0))
             duration = float(fields.get("DURATION", 0.0))
             results[uid] = {
@@ -6754,11 +7895,27 @@ class ClientHandler:
                 self.srv.stats.increment_stat(uid, 1, "wins")
             participant = self.srv.users.get(uid)
             if participant is not None:
+                results[uid]["name"] = participant.name
+                self.srv.ranking.get_or_create(uid, participant.name)
+                persona = participant_personas.get(int(uid), self._lan_persona_for(participant))
+                opponents = [
+                    opponent
+                    for other_uid, opponent in participant_personas.items()
+                    if int(other_uid) != int(uid)
+                ]
                 self.srv.stats.record_player_result(
-                    self._lan_persona_for(participant),
+                    persona,
                     outcome,
                     category_index=race_category,
+                    opponent_personas=opponents,
                 )
+        log.info(
+            "[uid=%d] LAN stats endgame game=%d category=%d participants=%d",
+            self.user.uid,
+            int(game_id),
+            int(race_category),
+            len(participant_personas),
+        )
 
         # PlayModuleGameResultReceived
         self.srv.play.game_result_received(game_id, results)
@@ -6785,6 +7942,9 @@ class ClientHandler:
         criteria.skill_min    = int(fields.get("SKILLMIN", 0))
         criteria.skill_max    = int(fields.get("SKILLMAX", 9999))
         criteria.ping_max     = int(fields.get("PINGMAX", 500))
+        criteria.game_type    = str(fields.get("TYPE", "") or "")
+        criteria.require_matched = self._field_bool(fields, "MATCHED", "MATCH", "RANKED", default=False)
+        criteria.password     = self._lan_join_secret_from_fields(fields)
 
         ok = self.srv.play.quick_join_enqueue(self.user.uid, criteria)
         if ok:
@@ -6795,6 +7955,11 @@ class ClientHandler:
     def _cmd_match(self, fields):
         """Lobby-based matchmaking."""
         criteria = MatchCriteria()
+        criteria.min_players = int(fields.get("MINSIZE", 2))
+        criteria.max_players = int(fields.get("MAXSIZE", 8))
+        criteria.game_type = str(fields.get("TYPE", "") or "")
+        criteria.require_matched = self._field_bool(fields, "MATCHED", "MATCH", "RANKED", default=False)
+        criteria.password = self._lan_join_secret_from_fields(fields)
         room_id  = self.srv.play.find_best_room(self.user.uid, criteria)
         if room_id:
             self.user.send(encode_message("MATCH", ROOM=room_id))
@@ -6820,10 +7985,25 @@ class ClientHandler:
         cat  = int(fields.get("CAT", 1))
         col  = str(fields.get("COL", ""))
         val  = fields.get("VAL")
+        persona = str(fields.get("PERS", fields.get("NAME", self.user.pers or self.user.name)))
 
         if val is not None:
             self.srv.stats.set_stat(self.user.uid, cat, col, val)
             self.user.send(f"+STAT CAT={cat} COL={col} VAL={val}\n")
+        elif not col:
+            summary = self.srv.stats.player_summary(persona)
+            self.user.send(
+                encode_message(
+                    "STAT",
+                    PERS=persona,
+                    RANK=int(summary.get("rank", 9999) or 9999),
+                    WINS=int(summary.get("wins", 0) or 0),
+                    LOSSES=int(summary.get("losses", 0) or 0),
+                    DISCONNECTS=int(summary.get("disconnects", 0) or 0),
+                    REP=int(summary.get("rep", 100) or 100),
+                    S=self.srv.stats.player_stat_csv(persona),
+                )
+            )
         else:
             v = self.srv.stats.get_stat(self.user.uid, cat, col)
             self.user.send(f"+STAT CAT={cat} COL={col} VAL={v}\n")
@@ -6943,6 +8123,36 @@ class ClientHandler:
             self.srv.rooms.leave(self.user.room, uid)
         if self.user.game:
             game = self.srv.games.get(self.user.game)
+            if (
+                game is not None
+                and str(getattr(game, "state", "") or "") == "ACTIVE"
+                and (
+                    self._disconnect_reason == "peer_closed"
+                    or str(self._disconnect_reason).startswith("recv_error:")
+                    or self._disconnect_reason == "send_failed_or_marked_disconnected"
+                )
+            ):
+                race_category = self._lan_game_race_category(game)
+                opponent_personas = []
+                for other_uid in getattr(game, "participants", []) or []:
+                    if int(other_uid) == int(uid):
+                        continue
+                    participant = self.srv.users.get(other_uid)
+                    if participant is not None:
+                        opponent_personas.append(self._lan_persona_for(participant))
+                self.srv.stats.record_player_result(
+                    self._lan_persona_for(self.user),
+                    "DISCONNECT",
+                    category_index=race_category,
+                    opponent_personas=opponent_personas,
+                )
+                log.info(
+                    "[uid=%d] LAN stats disconnect game=%d category=%d opponents=%d",
+                    uid,
+                    int(getattr(game, "id", 0) or 0),
+                    int(race_category),
+                    len(opponent_personas),
+                )
             game_after, removed = self.srv.games.leave(self.user.game, uid)
             self.user.game = 0
             self._lan_on_game_departure(game or game_after, departed_uid=int(uid), removed=removed)

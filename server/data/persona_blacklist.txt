@@ -1,0 +1,13 @@
+# Persona blacklist.
+# Empty lines and comments are ignored.
+#
+# exact:name blocks only that exact persona, case-insensitive.
+# contains:word blocks any persona containing that fragment.
+
+exact:admin
+exact:administrator
+exact:moderator
+exact:server
+exact:system
+exact:ea
+exact:eagames

@@ -1,8 +1,23 @@
 {
   "blocks": {},
-  "buddies": {},
-  "display": {},
-  "pending": {},
-  "saved_at": 1777174338.1509502,
+  "buddies": {
+    "alice": [
+      "termux"
+    ],
+    "termux": [
+      "alice"
+    ]
+  },
+  "display": {
+    "alice": "Alice",
+    "name32": "NAME32",
+    "termux": "Termux"
+  },
+  "pending": {
+    "termux": [
+      "name32"
+    ]
+  },
+  "saved_at": 1777498491.6799634,
   "version": 1
 }

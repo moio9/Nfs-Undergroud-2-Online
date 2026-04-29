@@ -144,11 +144,15 @@ def encode_room_record(room: dict) -> str:
         WHEN=time.time(),
         NAME=room.get("name", ""),
         HOST=room.get("host", ""),
+        TYPE=room.get("type", "PUBLIC"),
         MAXSIZE=room.get("maxsize", 8),
         MINSIZE=room.get("minsize", 2),
         COUNT=room.get("count", 0),
         CUSTFLAGS=room.get("custflags", 0),
         SYSFLAGS=room.get("sysflags", 0),
+        PRIV=room.get("private", 0),
+        MATCHED=room.get("matched", 0),
+        HASPASS=room.get("haspass", 0),
     )
 
 
@@ -160,12 +164,15 @@ def encode_game_record(game: dict) -> str:
         TYPE=game.get("type", "PUBLIC"),
         COUNT=game.get("count", 0),
         LIMIT=game.get("limit", 8),
+        MINSIZE=game.get("minsize", 2),
         ADDR=game.get("addr", "0.0.0.0"),
         PORT=game.get("port", 0),
         FLAGS=float(game.get("flags", 0)),
         SECRET=game.get("secret", ""),
         CUSTOM=game.get("custom", ""),
         FORMAT=game.get("format", ""),
+        PRIV=game.get("private", 0),
+        MATCHED=game.get("matched", 0),
         RLYHOST=game.get("rlyhost", game.get("addr", "0.0.0.0")),
         RLYPORT=game.get("rlyport", game.get("port", 0)),
     )

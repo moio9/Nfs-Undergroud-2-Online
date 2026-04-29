@@ -54,6 +54,15 @@ If a per-service host is omitted, it falls back to `server_host`. If `server_hos
 also omitted, the built-in default is used. Ports do not inherit from a main port;
 omitted ports use their built-in defaults.
 
+For same-machine or same-LAN race testing, keep `race_port` aligned with the
+server's `RACE_ENDPOINT` and `RACE_LISTEN` UDP port. The client can consume the
+server-advertised race endpoint, but the advertised port still has to be a port
+where the server is actually listening.
+
+The game also uses local UDP `3658` for race peer traffic. Keep `3658/udp` free
+on each client machine, especially when testing multiple clients locally. This is
+separate from `race_port`, which points at the relay.
+
 This build focuses on endpoint redirection, LAN server injection, and logging.
 
 ## Build

@@ -38,6 +38,9 @@ class MatchCriteria:
         self.skill_max    = 9999
         self.flags        = 0.0
         self.custom       = {}          # arbitrary key:value from game code
+        self.require_matched = False
+        self.allow_private = False
+        self.password     = ""
         self.region       = ""
         self.level_min    = 0
         self.level_max    = 999
@@ -191,7 +194,7 @@ class PlayModule:
             return
 
         game = self.games.create(room_id=0, host_uid=a.uid, limit=2,
-                                 game_type="RANKED")
+                                 game_type="RANKED", private=True, matched=True)
         if not game:
             return
 
@@ -230,6 +233,8 @@ class PlayModule:
             if room.full:
                 continue
             score = self._score_room(room, criteria)
+            if score < 0:
+                continue
             if score > best_score:
                 best_score = score
                 best_room  = room
@@ -242,6 +247,16 @@ class PlayModule:
 
     def _score_room(self, room, criteria: MatchCriteria) -> int:
         """PlayModuleMatchExtract — extract match score from room."""
+        if getattr(room, "private", False) and not getattr(criteria, "allow_private", False):
+            return -1
+        if getattr(room, "secret", "") and str(getattr(criteria, "password", "") or "") != str(getattr(room, "secret", "") or ""):
+            return -1
+        if getattr(criteria, "require_matched", False) and not getattr(room, "matched", False):
+            return -1
+        wanted_type = str(getattr(criteria, "game_type", "") or "").strip().upper()
+        room_type = str(getattr(room, "type", "") or "").strip().upper()
+        if wanted_type and room_type and wanted_type not in {room_type, "ANY", "ALL"}:
+            return -1
         score = 0
         score += room.count * 10        # prefer rooms with players
         if room.count >= criteria.min_players:

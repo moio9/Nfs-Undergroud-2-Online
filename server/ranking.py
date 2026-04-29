@@ -84,6 +84,9 @@ class NFSU2PlayerStats:
     def snap_hex_csv(self, index: int, rank: int) -> str:
         category_index = max(0, min(4, int(index) - 1))
         values = self.category(category_index)
+        # For non-overall boards the client reads the category values from the
+        # same offset as the full 5x7 stats block, so keep leading empty slots.
+        prefix = [""] * (category_index * NFSU2_CATEGORY_SIZE)
         # nfsuserver sends the visible list rank in the category's rating slot.
         row = [
             max(1, int(rank)),
@@ -94,8 +97,8 @@ class NFSU2PlayerStats:
             values[5],  # average opponent rep
             values[6],  # average opponent rating
         ]
-        prefix = [""] * (category_index * NFSU2_CATEGORY_SIZE)
-        return ",".join(prefix + [f"{max(0, int(value)):x}" for value in row])
+        encoded = [f"{max(0, int(value)):x}" for value in row]
+        return ",".join(prefix + encoded)
 
 
 # ======================================================================= #
@@ -178,6 +181,11 @@ class RankingSystem:
                     log.warning("MasterPlayCreate: maximum number of ranking lists (%d) exceeded.",
                                 self.rank_lim)
                 self._entries[uid] = RankEntry(uid, name)
+                self._dirty = True
+                self._rebuild_lists()
+            elif name and self._entries[uid].name != name:
+                self._entries[uid].name = name
+                self._dirty = True
             return self._entries[uid]
 
     def get(self, uid: int) -> Optional[RankEntry]:
@@ -200,9 +208,7 @@ class RankingSystem:
 
         now = time.time()
         for uid, result in results.items():
-            entry = self.get(uid)
-            if not entry:
-                continue
+            entry = self.get_or_create(uid, str(result.get("name", f"uid:{uid}")))
 
             # Check minimum game time
             game_duration = result.get("duration", 0)
@@ -213,16 +219,17 @@ class RankingSystem:
 
             outcome  = result.get("outcome", "LOSS")   # WIN/LOSS/DRAW
             score_d  = result.get("score_delta", 0.0)
+            outcome_key = str(outcome or "").strip().upper()
 
-            if outcome == "WIN":
+            if outcome_key == "WIN":
                 entry.wins  += 1
                 entry.score += max(10.0, score_d)
-            elif outcome == "LOSS":
-                entry.losses += 1
-                entry.score  = max(0.0, entry.score - 5.0 + score_d)
-            else:
+            elif outcome_key in ("DRAW", "TIE"):
                 entry.draws += 1
                 entry.score += 1.0
+            else:
+                entry.losses += 1
+                entry.score  = max(0.0, entry.score - 5.0 + score_d)
 
             entry.games     += 1
             entry.play_time += game_duration
@@ -420,18 +427,79 @@ class StatsSystem:
         stat = self.get_player_stats(persona, create=True)
         if stat is None:
             stat = NFSU2PlayerStats(persona or "Player")
+        with self._lock:
+            self._refresh_ratings_locked()
         return stat.full_hex_csv()
+
+    def profile_stat_csv(self, persona: str) -> str:
+        stat = self.get_player_stats(persona, create=True)
+        if stat is None:
+            stat = NFSU2PlayerStats(persona or "Player")
+        with self._lock:
+            self._refresh_ratings_locked()
+            values = list(stat.values)
+        # The captured USER profile frame carries three extra profile/car slots
+        # after the 5x7 race stat block.
+        values.extend([0, 0, 0])
+        return ",".join(f"{max(0, int(value)):x}" for value in values) + ","
+
+    def player_summary(self, persona: str) -> dict:
+        stat = self.get_player_stats(persona, create=True)
+        if stat is None:
+            stat = NFSU2PlayerStats(persona or "Player")
+        with self._lock:
+            self._refresh_ratings_locked()
+            return {
+                "rank": stat.get(0, "rating"),
+                "wins": stat.get(0, "wins"),
+                "losses": stat.get(0, "losses"),
+                "disconnects": stat.get(0, "disconnects"),
+                "rep": stat.get(0, "rep"),
+            }
 
     def player_personas(self) -> List[str]:
         with self._lock:
             return [stat.persona for stat in self._player_stats.values() if stat.persona]
 
-    def record_player_result(self, persona: str, outcome: str, category_index: int = 0):
+    def record_player_result(
+        self,
+        persona: str,
+        outcome: str,
+        category_index: int = 0,
+        opponent_personas: Optional[Iterable[str]] = None,
+    ):
         stat = self.get_player_stats(persona, create=True)
         if stat is None:
             return
+        norm_persona = self._norm_persona(persona)
+        opponent_stats = []
+        seen_opponents = set()
+        for opponent in opponent_personas or ():
+            opponent_key = self._norm_persona(opponent)
+            if not opponent_key or opponent_key == norm_persona or opponent_key in seen_opponents:
+                continue
+            opponent_stat = self.get_player_stats(opponent, create=True)
+            if opponent_stat is None:
+                continue
+            seen_opponents.add(opponent_key)
+            opponent_stats.append(opponent_stat)
         with self._lock:
+            self._refresh_ratings_locked()
+            opponent_avgs = {}
+            for cat_idx in {0, max(0, min(4, int(category_index)))}:
+                if not opponent_stats:
+                    continue
+                rep_values = [item.get(cat_idx, "rep") for item in opponent_stats]
+                rating_values = [item.get(cat_idx, "rating") for item in opponent_stats]
+                if rep_values and rating_values:
+                    opponent_avgs[cat_idx] = (
+                        int(round(sum(rep_values) / len(rep_values))),
+                        int(round(sum(rating_values) / len(rating_values))),
+                    )
             stat.bump_result(category_index, outcome)
+            for cat_idx, (opps_rep, opps_rating) in opponent_avgs.items():
+                stat.set(cat_idx, "opps_rep", opps_rep)
+                stat.set(cat_idx, "opps_rating", opps_rating)
             self._refresh_ratings_locked()
             self._dirty = True
 

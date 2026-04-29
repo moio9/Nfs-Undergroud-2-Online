@@ -166,7 +166,7 @@ class UserManager:
         self._hw_ids: Dict[str, int] = {}          # hw_mid -> uid (anti-cheat)
         self._cheat_log: List[dict] = []
 
-        self.max_users = cfg.get("USERS", 256)
+        self.max_users = int(cfg.get("SERVER_MAX_PLAYERS", cfg.get("USERS", 256)) or 256)
         self.inactivity_timeout = 300              # seconds
 
     # ------------------------------------------------------------------ #
