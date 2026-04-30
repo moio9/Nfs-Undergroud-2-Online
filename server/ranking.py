@@ -13,6 +13,13 @@ from typing import Dict, List, Optional, Any, Iterable
 log = logging.getLogger("ranking")
 
 
+def _limit_value(value: Any, default: int) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return max(0, int(default))
+
+
 NFSU2_STAT_CATEGORIES = ("all", "circuit", "sprint", "drag", "drift")
 NFSU2_STAT_FIELDS = ("rating", "wins", "losses", "disconnects", "rep", "opps_rep", "opps_rating")
 NFSU2_DEFAULT_CATEGORY = (9999, 0, 0, 0, 100, 101, 101)
@@ -158,7 +165,7 @@ class RankingSystem:
         self._last_save = time.time()
 
         self.rank_file      = cfg.get("RANKFILE", "data/rankings.dat")
-        self.rank_lim       = cfg.get("RANKLIM", 10000)
+        self.rank_lim       = _limit_value(cfg.get("RANKLIM", 10000), 10000)
         self.save_interval  = cfg.get("RANK_SAVE_TIME", 600)
         self.min_game_time  = cfg.get("RANK_MINIMUM_TIME", 60)
         self.do_evaluate    = bool(cfg.get("RANK_EVALUATE_GAME", 1))
@@ -176,9 +183,10 @@ class RankingSystem:
     def get_or_create(self, uid: int, name: str) -> RankEntry:
         with self._lock:
             if uid not in self._entries:
-                if len(self._entries) >= self.rank_lim:
+                if self.rank_lim > 0 and len(self._entries) >= self.rank_lim:
                     log.warning("MasterPlayCreate: maximum number of ranking lists (%d) exceeded.",
                                 self.rank_lim)
+                    return RankEntry(uid, name)
                 self._entries[uid] = RankEntry(uid, name)
                 self._dirty = True
                 self._rebuild_lists()
@@ -284,6 +292,9 @@ class RankingSystem:
                 data = json.load(f)
             entries = data.get("entries", [])
             for d in entries:
+                if self.rank_lim > 0 and len(self._entries) >= self.rank_lim:
+                    log.warning("Ranking load capped at RANKLIM=%d; remaining entries ignored.", self.rank_lim)
+                    break
                 e = RankEntry(d["uid"], d["name"])
                 e.score     = d.get("score", 0.0)
                 e.wins      = d.get("wins", 0)
@@ -352,7 +363,7 @@ class StatsSystem:
         self._dirty     = False
 
         self.stats_file     = cfg.get("STATSFILE", "data/stats.dat")
-        self.stats_lim      = cfg.get("STATLIM", 10000)
+        self.stats_lim      = _limit_value(cfg.get("STATLIM", 10000), 10000)
         self.stat_refresh   = cfg.get("SERVER_STAT_REFRESH", 60)
 
         self._load()
@@ -362,6 +373,9 @@ class StatsSystem:
     def get_user_stat(self, uid: int, cat_id: int) -> StatCategory:
         with self._lock:
             if uid not in self._user_stats:
+                if self.stats_lim > 0 and len(self._user_stats) >= self.stats_lim:
+                    log.warning("STAT: maximum number of user stats (%d) exceeded.", self.stats_lim)
+                    return StatCategory(cat_id, f"Cat{cat_id}")
                 self._user_stats[uid] = {}
             if cat_id not in self._user_stats[uid]:
                 self._user_stats[uid][cat_id] = StatCategory(cat_id, f"Cat{cat_id}")
@@ -371,7 +385,10 @@ class StatsSystem:
         """stat %s(%s) param %d"""
         cat = self.get_user_stat(uid, cat_id)
         cat.set(col, value)
-        self._dirty = True
+        with self._lock:
+            stored = uid in self._user_stats and cat_id in self._user_stats.get(uid, {})
+        if stored:
+            self._dirty = True
         log.debug("stat %s(%s) uid=%d = %s", cat.name, col, uid, value)
 
     def get_stat(self, uid: int, cat_id: int, col: str, default=None):
@@ -413,8 +430,9 @@ class StatsSystem:
         with self._lock:
             stat = self._player_stats.get(key)
             if stat is None and create:
-                if len(self._player_stats) >= self.stats_lim:
+                if self.stats_lim > 0 and len(self._player_stats) >= self.stats_lim:
                     log.warning("STAT: maximum number of player stats (%d) exceeded.", self.stats_lim)
+                    return None
                 stat = NFSU2PlayerStats(persona)
                 self._player_stats[key] = stat
                 self._dirty = True
@@ -567,6 +585,9 @@ class StatsSystem:
             with open(path, "r") as f:
                 data = json.load(f)
             for uid_str, cats in data.get("user_stats", {}).items():
+                if self.stats_lim > 0 and len(self._user_stats) >= self.stats_lim:
+                    log.warning("Stats load capped at STATLIM=%d for user stats; remaining entries ignored.", self.stats_lim)
+                    break
                 uid = int(uid_str)
                 self._user_stats[uid] = {}
                 for cat_id_str, cat_data in cats.items():
@@ -575,6 +596,9 @@ class StatsSystem:
                     cat.columns = cat_data.get("columns", {})
                     self._user_stats[uid][cat_id] = cat
             for persona, stat_data in data.get("player_stats", {}).items():
+                if self.stats_lim > 0 and len(self._player_stats) >= self.stats_lim:
+                    log.warning("Stats load capped at STATLIM=%d for player stats; remaining entries ignored.", self.stats_lim)
+                    break
                 if isinstance(stat_data, dict):
                     stat_persona = stat_data.get("persona", persona)
                     values = stat_data.get("values", [])

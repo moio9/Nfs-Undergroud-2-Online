@@ -6906,9 +6906,21 @@ class ClientHandler:
     # Main read loop                                                       #
     # ------------------------------------------------------------------ #
 
+    def _tcp_timeout(self) -> float:
+        try:
+            return max(1.0, min(3600.0, float(self.srv.cfg.get("SERVER_TCP_TIMEOUT", 60.0) or 60.0)))
+        except (TypeError, ValueError):
+            return 60.0
+
+    def _max_rx_buffer(self) -> int:
+        try:
+            return max(0, int(self.srv.cfg.get("SERVER_MAX_BUFFER_BYTES", 131072) or 0))
+        except (TypeError, ValueError):
+            return 131072
+
     def run(self):
         buf = b""
-        self.user.conn.settimeout(60.0)
+        self.user.conn.settimeout(self._tcp_timeout())
         try:
             while self.srv.is_running and self.user.connected:
                 try:
@@ -6924,6 +6936,18 @@ class ClientHandler:
                     log.info("[uid=%d] raw first recv len=%d hex=%s",
                              self.user.uid, len(data), data[:128].hex())
                 buf += data
+                max_buffer = self._max_rx_buffer()
+                if max_buffer > 0 and len(buf) > max_buffer:
+                    self._disconnect_reason = f"buffer_overflow:{len(buf)}>{max_buffer}"
+                    log.warning(
+                        "[uid=%d] receive buffer limit exceeded peer=%s:%d len=%d max=%d",
+                        self.user.uid,
+                        self.user.ip,
+                        self.user.port,
+                        len(buf),
+                        max_buffer,
+                    )
+                    break
                 if self._bootstrap_mode:
                     if self._secure20921_step or self._looks_like_20921_secure_packet(buf, 0):
                         consumed = self._consume_secure_bootstrap(buf)

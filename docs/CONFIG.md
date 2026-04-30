@@ -70,9 +70,12 @@ Public endpoints are what the server advertises to clients:
 
 ```ini
 SERVER_MAX_PLAYERS=256
+SERVER_MAX_CONNECTIONS=64
 SERVER_CONN_RATE_LIMIT=20
 SERVER_CONN_RATE_WINDOW=10
 SERVER_CONN_RATE_BLOCK=5
+SERVER_TCP_TIMEOUT=60
+SERVER_MAX_BUFFER_BYTES=131072
 BOOTSTRAP_ENDPOINT=127.0.0.1:20921
 LOBBY_ENDPOINT=127.0.0.1:20922
 RACE_ENDPOINT=127.0.0.1:5000
@@ -86,6 +89,10 @@ attempts are rejected once the limit is reached.
 inside `SERVER_CONN_RATE_WINDOW` seconds. When the limit is exceeded, new
 connections from that IP are dropped for `SERVER_CONN_RATE_BLOCK` seconds. Set
 `SERVER_CONN_RATE_LIMIT=0` to disable this throttle.
+
+`SERVER_MAX_CONNECTIONS` caps active lobby/bootstrap sockets before login, and
+`SERVER_MAX_BUFFER_BYTES` drops clients that keep sending incomplete frames or
+lines without letting the parser drain the receive buffer.
 
 Listen endpoints are local sockets opened by the server:
 
@@ -112,6 +119,37 @@ LOBBY_GSEA_CUST_FILTERS=1
 Use `1` for stock behavior: `gsea` applies race mode, car/performance class, and
 related `CUSTFLAGS` filters. Use `0` to ignore `CUSTFLAGS/CUSTMASK` during
 search; private/matched filtering through `SYSFLAGS` still applies.
+
+## Abuse Limits
+
+Control/social sockets use the same connection-rate throttle as lobby sockets,
+plus their own active connection and message limits:
+
+```ini
+CONTROL_REQUIRE_LOBBY_SESSION=1
+CONTROL_TRUST_CLIENT_PERSONA=0
+CONTROL_PROFILE_TTL=90.0
+CONTROL_MAX_CONNECTIONS=32
+CONTROL_PREAUTH_TIMEOUT=20.0
+CONTROL_IDLE_TIMEOUT=120.0
+CONTROL_HTTP_MAX_BODY=8192
+CONTROL_MAX_FRAME_BYTES=65535
+```
+
+With `CONTROL_REQUIRE_LOBBY_SESSION=1`, the control persona must match a recent
+lobby profile or an active lobby user from the same peer IP. Keep
+`CONTROL_TRUST_CLIENT_PERSONA=0` for public servers.
+
+UDP relay state is also bounded:
+
+```ini
+UDP_RELAY_MAX_CLIENTS=128
+UDP_RELAY_MAX_PENDING_ROOMS=128
+UDP_RELAY_PENDING_ROOM_TTL=60.0
+```
+
+`RANKLIM` and `STATLIM` are hard caps. Once reached, new ranking/stat identities
+are ignored instead of being persisted.
 
 ## Logging
 

@@ -126,6 +126,38 @@ class ControlHandler:
             or "EA MESSENGER" in upper
         )
 
+    def _cfg_int(self, key: str, default: int, *, min_value: int = 0, max_value: int = 1000000) -> int:
+        helper = getattr(self.srv, "_cfg_int", None)
+        if callable(helper):
+            return helper(key, default, min_value=min_value, max_value=max_value)
+        try:
+            value = int(self.srv.cfg.get(key, default) or default)
+        except (TypeError, ValueError):
+            value = int(default)
+        return max(min_value, min(max_value, value))
+
+    def _cfg_float(self, key: str, default: float, *, min_value: float = 1.0, max_value: float = 3600.0) -> float:
+        helper = getattr(self.srv, "_cfg_float", None)
+        if callable(helper):
+            return helper(key, default, min_value=min_value, max_value=max_value)
+        try:
+            value = float(self.srv.cfg.get(key, default) or default)
+        except (TypeError, ValueError):
+            value = float(default)
+        return max(min_value, min(max_value, value))
+
+    def _control_preauth_timeout(self) -> float:
+        return self._cfg_float("CONTROL_PREAUTH_TIMEOUT", 20.0, min_value=1.0, max_value=300.0)
+
+    def _control_idle_timeout(self) -> float:
+        return self._cfg_float("CONTROL_IDLE_TIMEOUT", 120.0, min_value=5.0, max_value=3600.0)
+
+    def _control_http_max_body(self) -> int:
+        return self._cfg_int("CONTROL_HTTP_MAX_BODY", 8192, min_value=0, max_value=1048576)
+
+    def _control_max_frame_bytes(self) -> int:
+        return self._cfg_int("CONTROL_MAX_FRAME_BYTES", 65535, min_value=12, max_value=1048576)
+
     def _register_social(self) -> None:
         persona = str(self._peer_user or "").strip()
         if not persona:
@@ -144,6 +176,17 @@ class ControlHandler:
         candidate = str(profile.get("persona") or profile.get("name") or "").strip()
         if not candidate or self._looks_like_product_user(candidate):
             return
+        allowed = self.srv.control_profile_allowed(self.peer_ip, candidate)
+        if not allowed:
+            log.warning(
+                "CONTROL social-claim denied peer=%s:%d candidate=%s reason=%s",
+                self.peer_ip,
+                self.peer_port,
+                candidate,
+                reason or "-",
+            )
+            return
+        candidate = allowed
         if candidate != self._peer_user:
             old_user = self._peer_user
             self._peer_user = candidate
@@ -167,6 +210,18 @@ class ControlHandler:
         if not candidate or self._looks_like_product_user(candidate):
             self._claim_peer_profile("kv-empty")
             return
+        allowed = self.srv.control_profile_allowed(self.peer_ip, candidate)
+        if not allowed:
+            log.warning(
+                "CONTROL social-user denied peer=%s:%d current=%s candidate=%s",
+                self.peer_ip,
+                self.peer_port,
+                self._peer_user or "-",
+                candidate,
+            )
+            self._claim_peer_profile("candidate-denied")
+            return
+        candidate = allowed
         if candidate != self._peer_user:
             old_user = self._peer_user
             self._peer_user = candidate
@@ -224,6 +279,7 @@ class ControlHandler:
             lines.append(f"USER={target}")
         if list_tag:
             lines.append(f"LIST={list_tag}")
+        lines.extend(["STAT=OK", "RESULT=OK"])
         return self._send_message(verb, lines or self._ack_lines(kv, status=True))
 
     def _send_roster_change(self, chng: str, user: str, attr: str = "") -> bool:
@@ -528,13 +584,14 @@ class ControlHandler:
                 ]
             )
         delivered = 0
+        aux_delivered = 0
         lobby_delivered = 0
         if target and not self.srv.control_social_is_blocked(self._peer_user, target):
             row = self.srv.control_social_presence_row(target, self._peer_user)
             if row is not None:
-                delivered += self.srv.control_social_deliver(target, "PGET", self._presence_lines_for_row(row))
-            delivered += self.srv.control_social_deliver(target, "PADD", ["LRSC=PC", f"USER={self._peer_user}"])
-            delivered += self.srv.control_social_deliver(target, "INVT", invite_lines)
+                aux_delivered += self.srv.control_social_deliver(target, "PGET", self._presence_lines_for_row(row))
+            aux_delivered += self.srv.control_social_deliver(target, "PADD", ["LRSC=PC", f"USER={self._peer_user}"])
+            delivered = self.srv.control_social_deliver(target, "INVT", invite_lines)
             if sender_handler is not None:
                 deliver_invite = getattr(sender_handler, "_lobby_deliver_invite", None)
                 if callable(deliver_invite):
@@ -543,13 +600,14 @@ class ControlHandler:
                     except Exception:
                         lobby_delivered = 0
         log.info(
-            "CONTROL invite peer=%s:%d verb=%s from=%s target=%s delivered=%d lobby=%d game=%d text=%s",
+            "CONTROL invite peer=%s:%d verb=%s from=%s target=%s delivered=%d aux=%d lobby=%d game=%d text=%s",
             self.peer_ip,
             self.peer_port,
             verb,
             self._peer_user or "-",
             target or "-",
             delivered,
+            aux_delivered,
             lobby_delivered,
             game_id,
             invite_text or "-",
@@ -858,6 +916,18 @@ class ControlHandler:
                     content_length = 0
                 break
 
+        body_limit = self._control_http_max_body()
+        if body_limit >= 0 and content_length > body_limit:
+            self._disconnect_reason = f"http_body_too_large:{content_length}>{body_limit}"
+            log.warning(
+                "CONTROL HTTP body limit exceeded peer=%s:%d len=%d max=%d",
+                self.peer_ip,
+                self.peer_port,
+                content_length,
+                body_limit,
+            )
+            return None
+
         body_have = len(data) - (header_end + 4)
         missing = content_length - body_have
         while missing > 0 and len(data) < limit + content_length:
@@ -968,7 +1038,8 @@ class ControlHandler:
             return None
 
         declared = struct.unpack(">I", hdr[8:12])[0]
-        if declared < 12 or declared > 65535:
+        max_frame = self._control_max_frame_bytes()
+        if declared < 12 or declared > max_frame:
             self._disconnect_reason = f"invalid_len:{declared}"
             return None
 
@@ -978,7 +1049,7 @@ class ControlHandler:
         return verb_raw.decode("ascii", errors="replace"), body
 
     def run(self):
-        self.conn.settimeout(300.0)
+        self.conn.settimeout(self._control_preauth_timeout())
         try:
             log.info("CONTROL active peer=%s:%d", self.peer_ip, self.peer_port)
             while self.srv.is_running:
@@ -1019,6 +1090,7 @@ class ControlHandler:
                         )
                         self._prel_seen = True
                         self._session_bootstrapped = True
+                        self.conn.settimeout(self._control_idle_timeout())
                         log.info(
                             "CONTROL keep-open peer=%s:%d after PRELRESP",
                             self.peer_ip,
@@ -1075,6 +1147,7 @@ class ControlHandler:
 
                 if verb == "AUTH":
                     self._session_bootstrapped = True
+                    self.conn.settimeout(self._control_idle_timeout())
                     self._auth_prod = kv.get("PROD", self._auth_prod)
                     self._maybe_update_peer_user(kv)
                     if not self._send_message("AUTH", ["TITL=EA MESSENGER"]):

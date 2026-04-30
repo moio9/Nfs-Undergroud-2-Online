@@ -29,6 +29,8 @@ class EAMessengerServer:
         }
         self._control_profile_events: List[dict] = []
         self._control_profile_lock = threading.Lock()
+        self._control_conn_lock = threading.Lock()
+        self._control_active_connections = 0
         self._social_lock = threading.Lock()
         self._social_handlers: Dict[str, Set[object]] = {}
         self._social_handler_user: Dict[object, str] = {}
@@ -47,6 +49,26 @@ class EAMessengerServer:
         sock.listen(backlog)
         sock.settimeout(1.0)
         return sock
+
+    def _cfg_int(self, key: str, default: int, *, min_value: int = 0, max_value: int = 100000) -> int:
+        helper = getattr(self.srv, "_cfg_int", None)
+        if callable(helper):
+            return helper(key, default, min_value=min_value, max_value=max_value)
+        try:
+            value = int(self.srv.cfg.get(key, default) or default)
+        except (TypeError, ValueError):
+            value = int(default)
+        return max(min_value, min(max_value, value))
+
+    def _cfg_float(self, key: str, default: float, *, min_value: float = 0.0, max_value: float = 3600.0) -> float:
+        helper = getattr(self.srv, "_cfg_float", None)
+        if callable(helper):
+            return helper(key, default, min_value=min_value, max_value=max_value)
+        try:
+            value = float(self.srv.cfg.get(key, default) or default)
+        except (TypeError, ValueError):
+            value = float(default)
+        return max(min_value, min(max_value, value))
 
     def start(
         self,
@@ -286,6 +308,75 @@ class EAMessengerServer:
                     if float(item.get("time", 0.0) or 0.0) >= cutoff
                 ]
 
+    def _control_profile_ttl(self) -> float:
+        return self._cfg_float("CONTROL_PROFILE_TTL", 90.0, min_value=5.0, max_value=600.0)
+
+    def _control_require_lobby_session(self) -> bool:
+        return bool(getattr(self.srv, "_cfg_flag")("CONTROL_REQUIRE_LOBBY_SESSION"))
+
+    def _control_trust_client_persona(self) -> bool:
+        return bool(getattr(self.srv, "_cfg_flag")("CONTROL_TRUST_CLIENT_PERSONA"))
+
+    def _control_lobby_users_for_ip(self, peer_ip: str) -> List[object]:
+        peer_ip = str(peer_ip or "").strip()
+        if not peer_ip:
+            return []
+        try:
+            users = self.srv.users.all_users()
+        except Exception:
+            return []
+        matches = []
+        for user in users:
+            if not bool(getattr(user, "connected", False)):
+                continue
+            addrs = {
+                str(getattr(user, "ip", "") or "").strip(),
+                str(getattr(user, "addr", "") or "").strip(),
+                str(getattr(user, "laddr", "") or "").strip(),
+            }
+            if peer_ip in addrs:
+                matches.append(user)
+        matches.sort(key=lambda user: int(getattr(user, "uid", 0) or 0))
+        return matches
+
+    def control_profile_allowed(self, client_addr: str, persona: str) -> str:
+        display = self._social_display_name(persona)
+        key = self._social_key(display)
+        peer_ip = str(client_addr or "").strip()
+        if not key:
+            return ""
+        if self._control_trust_client_persona():
+            return display
+
+        now = time.time()
+        ttl = self._control_profile_ttl()
+        with self._control_profile_lock:
+            profile_events = list(self._control_profile_events)
+        for event in reversed(profile_events):
+            if now - float(event.get("time", 0.0) or 0.0) > ttl:
+                continue
+            event_addr = str(event.get("client_addr", "") or "").strip()
+            if self._control_require_lobby_session() and not event_addr:
+                continue
+            if event_addr and event_addr != peer_ip:
+                continue
+            event_names = {
+                self._social_key(str(event.get("persona", "") or "")),
+                self._social_key(str(event.get("name", "") or "")),
+            }
+            if key in event_names:
+                return str(event.get("persona") or event.get("name") or display).strip()
+
+        for user in self._control_lobby_users_for_ip(peer_ip):
+            persona_text = str(getattr(user, "pers", "") or "").strip()
+            name_text = str(getattr(user, "name", "") or "").strip()
+            if key in {self._social_key(persona_text), self._social_key(name_text)}:
+                return persona_text or name_text or display
+
+        if not self._control_require_lobby_session():
+            return display
+        return ""
+
     def get_control_profile(self, client_addr: str = "") -> dict:
         now = time.time()
         with self._control_profile_lock:
@@ -302,6 +393,8 @@ class EAMessengerServer:
             event_addr = str(event.get("client_addr", "") or "").strip()
             if not persona or self._social_key(persona) in used:
                 return None
+            if self._control_require_lobby_session() and not event_addr:
+                return None
             if event_addr and event_addr != peer_ip:
                 return None
             return {
@@ -310,23 +403,10 @@ class EAMessengerServer:
                 "client_addr": peer_ip,
             }
 
-        try:
-            candidates = [
-                user
-                for user in self.srv.users.all_users()
-                if bool(getattr(user, "connected", False))
-                and peer_ip
-                in {
-                    str(getattr(user, "ip", "") or "").strip(),
-                    str(getattr(user, "addr", "") or "").strip(),
-                    str(getattr(user, "laddr", "") or "").strip(),
-                }
-            ]
-        except Exception:
-            candidates = []
+        candidates = self._control_lobby_users_for_ip(peer_ip)
         recent_events = [
             event for event in profile_events
-            if now - float(event.get("time", 0.0) or 0.0) <= 90.0
+            if now - float(event.get("time", 0.0) or 0.0) <= self._control_profile_ttl()
         ]
         for event in reversed(recent_events):
             selected = profile_from_event(event)
@@ -359,7 +439,11 @@ class EAMessengerServer:
                 return selected
 
         fallback_persona = str(profile.get("persona", "") or profile.get("name", "") or "").strip()
-        if fallback_persona and self._social_key(fallback_persona) not in used:
+        if (
+            not self._control_require_lobby_session()
+            and fallback_persona
+            and self._social_key(fallback_persona) not in used
+        ):
             return {
                 "name": str(profile.get("name", "") or ""),
                 "persona": fallback_persona,
@@ -1045,6 +1129,26 @@ class EAMessengerServer:
                 delivered += 1
         return delivered
 
+    def _control_open_slot(self, ip: str) -> bool:
+        max_connections = self._cfg_int("CONTROL_MAX_CONNECTIONS", 32, min_value=0, max_value=100000)
+        if max_connections <= 0:
+            return True
+        with self._control_conn_lock:
+            if self._control_active_connections >= max_connections:
+                log.warning(
+                    "CONTROL connection limit reached: ip=%s active=%d max=%d",
+                    ip or "-",
+                    self._control_active_connections,
+                    max_connections,
+                )
+                return False
+            self._control_active_connections += 1
+            return True
+
+    def _control_close_slot(self) -> None:
+        with self._control_conn_lock:
+            self._control_active_connections = max(0, self._control_active_connections - 1)
+
     def _accept_loop(self, listen_sock: socket.socket, prefix: str) -> None:
         while self.srv.is_running:
             try:
@@ -1054,9 +1158,46 @@ class EAMessengerServer:
             except OSError:
                 break
 
+            if not self.srv._accepts_new_connection(addr[0]):
+                try:
+                    conn.shutdown(socket.SHUT_RDWR)
+                except Exception:
+                    pass
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                continue
+
+            if self.srv._admin_is_ip_banned(addr[0]):
+                log.info("Admin ban refused control connection from %s:%d", addr[0], addr[1])
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                continue
+
+            if not self._control_open_slot(addr[0]):
+                try:
+                    conn.shutdown(socket.SHUT_RDWR)
+                except Exception:
+                    pass
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                continue
+
             handler = ControlHandler(self.srv, conn, addr)
+
+            def _run_handler() -> None:
+                try:
+                    handler.run()
+                finally:
+                    self._control_close_slot()
+
             thread = threading.Thread(
-                target=handler.run,
+                target=_run_handler,
                 name=f"{prefix}-{addr[0]}:{addr[1]}",
                 daemon=True,
             )

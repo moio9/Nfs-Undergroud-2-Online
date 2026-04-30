@@ -354,6 +354,8 @@ class GameServer:
         self._connection_rate_lock = threading.Lock()
         self._connection_rate_attempts: Dict[str, List[float]] = {}
         self._connection_rate_blocked_until: Dict[str, float] = {}
+        self._lobby_connection_lock = threading.Lock()
+        self._lobby_active_connections = 0
         self._lobby_dir_challenges: Dict[str, Tuple[str, str, float]] = {}
         self._lobby_dir_challenges_lock = threading.Lock()
         self._udp_relay_uid_addr_by_room: Dict[int, Dict[int, Addr]] = {}
@@ -361,12 +363,15 @@ class GameServer:
         self._udp_relay_rooms: Dict[int, Set[Addr]] = {}
         self._udp_relay_pending_room_packets: Dict[int, List[Tuple[Addr, bytes]]] = {}
         self._udp_relay_pending_room_raw_packets: Dict[int, List[Tuple[Addr, bytes]]] = {}
+        self._udp_relay_pending_room_seen: Dict[int, float] = {}
+        self._udp_relay_pending_room_raw_seen: Dict[int, float] = {}
         self._udp_relay_raw_started_rooms: Set[int] = set()
         self._udp_relay_host_bootstrap_sent: Set[Tuple[int, Addr, Addr]] = set()
         self._udp_relay_missing_65_sent: Set[Tuple[int, Addr, Addr]] = set()
         self._udp_relay_host_continuation_sent: Set[Tuple[int, Addr, Addr]] = set()
         self._udp_relay_alias_send_logged: Set[Tuple[Addr, Addr]] = set()
         self._udp_relay_recv_log_count = 0
+        self._udp_relay_limit_log_at = 0.0
         self._last_master_stat_payload = ""
         self._last_master_stat_log_time = 0.0
         self._master_stat_dirty = True
@@ -433,6 +438,28 @@ class GameServer:
                 continue
         return False
 
+    def _cfg_int(self, key: str, default: int, *, min_value: Optional[int] = None, max_value: Optional[int] = None) -> int:
+        try:
+            value = int(self.cfg.get(key, default) or default)
+        except (TypeError, ValueError):
+            value = int(default)
+        if min_value is not None:
+            value = max(int(min_value), value)
+        if max_value is not None:
+            value = min(int(max_value), value)
+        return value
+
+    def _cfg_float(self, key: str, default: float, *, min_value: Optional[float] = None, max_value: Optional[float] = None) -> float:
+        try:
+            value = float(self.cfg.get(key, default) or default)
+        except (TypeError, ValueError):
+            value = float(default)
+        if min_value is not None:
+            value = max(float(min_value), value)
+        if max_value is not None:
+            value = min(float(max_value), value)
+        return value
+
     def _connection_rate_settings(self) -> Tuple[int, float, float]:
         try:
             limit = int(self.cfg.get("SERVER_CONN_RATE_LIMIT", 20) or 0)
@@ -495,6 +522,29 @@ class GameServer:
                     self._connection_rate_attempts.pop(addr, None)
                     self._connection_rate_blocked_until.pop(addr, None)
             return True
+
+    def _lobby_max_connections(self) -> int:
+        return self._cfg_int("SERVER_MAX_CONNECTIONS", 64, min_value=0, max_value=100000)
+
+    def _open_lobby_connection_slot(self, ip: str) -> bool:
+        max_connections = self._lobby_max_connections()
+        if max_connections <= 0:
+            return True
+        with self._lobby_connection_lock:
+            if self._lobby_active_connections >= max_connections:
+                log.warning(
+                    "Lobby connection limit reached: ip=%s active=%d max=%d",
+                    ip or "-",
+                    self._lobby_active_connections,
+                    max_connections,
+                )
+                return False
+            self._lobby_active_connections += 1
+            return True
+
+    def _close_lobby_connection_slot(self) -> None:
+        with self._lobby_connection_lock:
+            self._lobby_active_connections = max(0, self._lobby_active_connections - 1)
 
     def _sync_udp_relay_verbose_filter(self) -> None:
         _udp_relay_verbose_filter.enabled = bool(self._udp_relay_verbose)
@@ -3020,9 +3070,27 @@ class GameServer:
                     pass
                 continue
 
+            if not self._open_lobby_connection_slot(addr[0]):
+                try:
+                    conn.shutdown(socket.SHUT_RDWR)
+                except Exception:
+                    pass
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                continue
+
             user    = User(conn, addr)
             handler = ClientHandler(self, user)
-            t = threading.Thread(target=handler.run,
+
+            def _run_handler() -> None:
+                try:
+                    handler.run()
+                finally:
+                    self._close_lobby_connection_slot()
+
+            t = threading.Thread(target=_run_handler,
                                  name=f"{thread_prefix}-{addr[0]}",
                                  daemon=True)
             t.start()
@@ -3178,9 +3246,33 @@ class GameServer:
         if not mapping:
             self._udp_relay_uid_addr_by_room.pop(room_id, None)
 
-    def _udp_relay_touch_client(self, addr: Addr, relay_listen_port: int = 0) -> UDPRelayClientState:
+    def _udp_relay_max_clients(self) -> int:
+        return self._cfg_int("UDP_RELAY_MAX_CLIENTS", 128, min_value=0, max_value=100000)
+
+    def _udp_relay_max_pending_rooms(self) -> int:
+        return self._cfg_int("UDP_RELAY_MAX_PENDING_ROOMS", 128, min_value=0, max_value=100000)
+
+    def _udp_relay_pending_room_ttl(self) -> float:
+        return self._cfg_float("UDP_RELAY_PENDING_ROOM_TTL", 60.0, min_value=5.0, max_value=3600.0)
+
+    def _udp_relay_touch_client(self, addr: Addr, relay_listen_port: int = 0) -> Optional[UDPRelayClientState]:
         state = self._udp_relay_clients.get(addr)
         if state is None:
+            max_clients = self._udp_relay_max_clients()
+            if max_clients > 0 and len(self._udp_relay_clients) >= max_clients:
+                self._udp_relay_cleanup_idle()
+            if max_clients > 0 and len(self._udp_relay_clients) >= max_clients:
+                now = time.time()
+                if now >= self._udp_relay_limit_log_at:
+                    log.warning(
+                        "UDP relay client limit reached: src=%s:%d active=%d max=%d",
+                        addr[0],
+                        addr[1],
+                        len(self._udp_relay_clients),
+                        max_clients,
+                    )
+                    self._udp_relay_limit_log_at = now + 5.0
+                return None
             state = UDPRelayClientState(addr=addr)
             self._udp_relay_clients[addr] = state
         state.last_seen = time.time()
@@ -3191,6 +3283,50 @@ class GameServer:
 
     def _udp_relay_idle_timeout(self) -> float:
         return max(30.0, float(self.cfg.get("GAME_EXPIRE_TIME", 300) or 300))
+
+    def _udp_relay_cleanup_pending_rooms(self) -> None:
+        cutoff = time.time() - self._udp_relay_pending_room_ttl()
+        for store, seen in (
+            (self._udp_relay_pending_room_packets, self._udp_relay_pending_room_seen),
+            (self._udp_relay_pending_room_raw_packets, self._udp_relay_pending_room_raw_seen),
+        ):
+            stale = [room for room, at in seen.items() if float(at or 0.0) < cutoff]
+            for room in stale:
+                store.pop(room, None)
+                seen.pop(room, None)
+            max_rooms = self._udp_relay_max_pending_rooms()
+            if max_rooms > 0 and len(store) > max_rooms:
+                overflow = sorted(store, key=lambda room: float(seen.get(room, 0.0) or 0.0))
+                for room in overflow[: len(store) - max_rooms]:
+                    store.pop(room, None)
+                    seen.pop(room, None)
+
+    def _udp_relay_pending_list(
+        self,
+        store: Dict[int, List[Tuple[Addr, bytes]]],
+        seen: Dict[int, float],
+        room: int,
+    ) -> Optional[List[Tuple[Addr, bytes]]]:
+        room_id = int(room or 0)
+        if room_id <= 0 or room_id == 0xFFFFFFFF:
+            return None
+        if room_id not in store:
+            self._udp_relay_cleanup_pending_rooms()
+            max_rooms = self._udp_relay_max_pending_rooms()
+            if max_rooms > 0 and len(store) >= max_rooms:
+                now = time.time()
+                if now >= self._udp_relay_limit_log_at:
+                    log.warning(
+                        "UDP relay pending-room limit reached: room=0x%08X active=%d max=%d",
+                        room_id,
+                        len(store),
+                        max_rooms,
+                    )
+                    self._udp_relay_limit_log_at = now + 5.0
+                return None
+            store[room_id] = []
+        seen[room_id] = time.time()
+        return store[room_id]
 
     def _udp_relay_wrapped_target_is_plausible(self, target: Addr) -> bool:
         if target in self._udp_relay_clients:
@@ -3585,6 +3721,8 @@ class GameServer:
                     self._udp_relay_rooms.pop(state.room, None)
                     self._udp_relay_pending_room_packets.pop(state.room, None)
                     self._udp_relay_pending_room_raw_packets.pop(state.room, None)
+                    self._udp_relay_pending_room_seen.pop(state.room, None)
+                    self._udp_relay_pending_room_raw_seen.pop(state.room, None)
                     self._udp_relay_raw_started_rooms.discard(state.room)
                     self._udp_relay_host_bootstrap_sent = {
                         item for item in self._udp_relay_host_bootstrap_sent if item[0] != state.room
@@ -3638,6 +3776,8 @@ class GameServer:
 
         self._udp_relay_pending_room_packets.pop(room_id, None)
         self._udp_relay_pending_room_raw_packets.pop(room_id, None)
+        self._udp_relay_pending_room_seen.pop(room_id, None)
+        self._udp_relay_pending_room_raw_seen.pop(room_id, None)
         self._udp_relay_raw_started_rooms.discard(room_id)
         self._udp_relay_host_bootstrap_sent = {
             item for item in self._udp_relay_host_bootstrap_sent if item[0] != room_id
@@ -3665,6 +3805,7 @@ class GameServer:
         stale = [addr for addr, state in self._udp_relay_clients.items() if state.last_seen < cutoff]
         for addr in stale:
             self._udp_relay_drop_client(addr)
+        self._udp_relay_cleanup_pending_rooms()
 
     def _udp_relay_room_last_seen(self, room: int) -> float:
         room_id = int(room or 0)
@@ -4799,6 +4940,7 @@ class GameServer:
 
     def _udp_relay_replay_pending_room_packets(self, room: int, dst: Addr) -> None:
         pending = self._udp_relay_pending_room_packets.pop(room, [])
+        self._udp_relay_pending_room_seen.pop(room, None)
         for src, payload in pending:
             cmd = _udp_read_u32_le(payload, 0) if len(payload) >= 4 else 0
             wrapped_src = self._udp_relay_wrapped_src(
@@ -4900,8 +5042,10 @@ class GameServer:
             replayed += 1
         if keep:
             self._udp_relay_pending_room_raw_packets[room] = keep
+            self._udp_relay_pending_room_raw_seen[room] = time.time()
         else:
             self._udp_relay_pending_room_raw_packets.pop(room, None)
+            self._udp_relay_pending_room_raw_seen.pop(room, None)
         if replayed:
             log.info(
                 "UDP relay replayed(raw pending batch): room=0x%08X dst=%s:%d count=%d",
@@ -4967,6 +5111,8 @@ class GameServer:
 
     def _udp_relay_handle_datagram(self, data: bytes, src: Addr, relay_listen_port: int = 0) -> None:
         sender = self._udp_relay_touch_client(src, relay_listen_port)
+        if sender is None:
+            return
         decoded = _udp_maybe_decode_wrapped(data)
         payload = data
         target: Optional[Addr] = None
@@ -5130,6 +5276,7 @@ class GameServer:
             room_members = self._udp_relay_rooms.get(room, set())
             if len(room_members) > 1 and room in self._udp_relay_pending_room_packets:
                 pending = self._udp_relay_pending_room_packets.pop(room, [])
+                self._udp_relay_pending_room_seen.pop(room, None)
                 for pending_src, pending_payload in pending:
                     if pending_src not in self._udp_relay_clients:
                         continue
@@ -5689,9 +5836,15 @@ class GameServer:
                     # room one side at a time after post-race reset, and if we
                     # drop the early cmd=1/cmd=5 packets there is nothing left
                     # to replay once the peer finally appears.
-                    room_pending = self._udp_relay_pending_room_packets.setdefault(room, [])
-                    already_saved = any(pending_src == src and pending_payload == payload for pending_src, pending_payload in room_pending)
-                    if not already_saved and len(room_pending) < 8:
+                    room_pending = self._udp_relay_pending_list(
+                        self._udp_relay_pending_room_packets,
+                        self._udp_relay_pending_room_seen,
+                        int(room),
+                    )
+                    already_saved = bool(room_pending) and any(
+                        pending_src == src and pending_payload == payload for pending_src, pending_payload in room_pending
+                    )
+                    if room_pending is not None and not already_saved and len(room_pending) < 8:
                         room_pending.append((src, payload))
                         log.info(
                             "UDP room pending(saved): src=%s:%d cmd=%d room=0x%08X count=%d",
@@ -5710,9 +5863,15 @@ class GameServer:
                             room,
                         )
                 elif rawish_packet:
-                    room_raw = self._udp_relay_pending_room_raw_packets.setdefault(int(room), [])
-                    already_saved = any(pending_src == src and pending_payload == payload for pending_src, pending_payload in room_raw)
-                    if not already_saved and len(room_raw) < 64:
+                    room_raw = self._udp_relay_pending_list(
+                        self._udp_relay_pending_room_raw_packets,
+                        self._udp_relay_pending_room_raw_seen,
+                        int(room),
+                    )
+                    already_saved = bool(room_raw) and any(
+                        pending_src == src and pending_payload == payload for pending_src, pending_payload in room_raw
+                    )
+                    if room_raw is not None and not already_saved and len(room_raw) < 64:
                         room_raw.append((src, payload))
                         log.info(
                             "UDP room pending(raw saved): src=%s:%d len=%d w0=0x%08X room=0x%08X wrapped=%s target=%s:%s count=%d",
@@ -5724,7 +5883,7 @@ class GameServer:
                             wrapped_in,
                             target[0] if target is not None else "-",
                             target[1] if target is not None else "-",
-                            len(room_raw),
+                            len(room_raw or []),
                         )
                     else:
                         log.info(
@@ -5737,7 +5896,7 @@ class GameServer:
                             wrapped_in,
                             target[0] if target is not None else "-",
                             target[1] if target is not None else "-",
-                            len(room_raw),
+                            len(room_raw or []),
                         )
                 else:
                     log.info(
@@ -5749,8 +5908,12 @@ class GameServer:
                     )
             elif sender.room is not None:
                 first_word = _udp_read_u32_le(payload, 0) if len(payload) >= 4 else 0
-                room_raw = self._udp_relay_pending_room_raw_packets.setdefault(sender.room, [])
-                if len(room_raw) < 64:
+                room_raw = self._udp_relay_pending_list(
+                    self._udp_relay_pending_room_raw_packets,
+                    self._udp_relay_pending_room_raw_seen,
+                    int(sender.room),
+                )
+                if room_raw is not None and len(room_raw) < 64:
                     room_raw.append((src, payload))
                     log.info(
                         "UDP relay pending(raw saved): src=%s:%d len=%d w0=0x%08X sender_room=0x%08X wrapped=%s target=%s:%s count=%d",
@@ -5762,7 +5925,7 @@ class GameServer:
                         wrapped_in,
                         target[0] if target is not None else "-",
                         target[1] if target is not None else "-",
-                        len(room_raw),
+                        len(room_raw or []),
                     )
                 else:
                     log.info(
@@ -5775,7 +5938,7 @@ class GameServer:
                         wrapped_in,
                         target[0] if target is not None else "-",
                         target[1] if target is not None else "-",
-                        len(room_raw),
+                        len(room_raw or []),
                     )
                 log.info(
                     "UDP relay drop(raw no-recipient): src=%s:%d len=%d w0=0x%08X sender_room=0x%08X wrapped=%s target=%s:%s",
@@ -6177,6 +6340,7 @@ class GameServer:
         messenger = self.__dict__.get("messenger")
         if messenger is not None and (
             name in {"remember_control_profile", "get_control_profile", "_social_key", "_social_reports"}
+            or name.startswith("control_profile_")
             or name.startswith("control_social_")
         ):
             return getattr(messenger, name)
