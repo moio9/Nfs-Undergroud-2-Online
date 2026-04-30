@@ -6,7 +6,6 @@ Matches DLL: RANK_*, STAT_*, PlayModuleRanker, PlayModuleRanklist
 import os
 import time
 import json
-import hashlib
 import threading
 import logging
 from typing import Dict, List, Optional, Any, Iterable

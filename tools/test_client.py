@@ -206,7 +206,7 @@ def assert_detached_open_game_is_discarded_on_relogin():
         fh.write(textwrap.dedent("""\
             CONTROL_LISTEN_PORT=0
             CONTROL_PORT=0
-            LAN_DETACHED_GRACE=20
+            LOBBY_DETACHED_GRACE=20
         """))
         cfg_path = fh.name
 
@@ -331,7 +331,7 @@ def assert_offline_open_game_is_discarded_without_detach_marker():
             CONTROL_LISTEN_PORT=0
             CONTROL_ALIAS_PORT=0
             RELAY_PORT=0
-            LAN_PERSONA_UNIQUE=1
+            PERSONA_UNIQUE=1
         """))
         cfg_path = cfg.name
 
@@ -392,7 +392,7 @@ def assert_social_aliases_do_not_self_target():
             CONTROL_LISTEN_PORT=0
             CONTROL_SOCIAL_ENABLE=1
             CONTROL_SOCIAL_ALL_ONLINE_ENABLE=1
-            LAN_AUTH_ACCOUNTS_FILE=/home/moioyoyo/U2Online/LAN/data/auth_accounts.json
+            AUTH_ACCOUNTS_FILE=/home/moioyoyo/U2Online/LAN/data/auth_accounts.json
         """))
         cfg_path = cfg.name
 
@@ -407,7 +407,7 @@ def assert_social_aliases_do_not_self_target():
         assert srv.control_social_same_identity("Moio", "Moio9"), "alias identity was not canonicalized"
         assert srv.control_social_add_relation("Moio", "Moio9", "B") == "N", "self alias became a buddy row"
         assert srv.control_social_presence_row("Moio", "Moio9") is None, "self alias leaked into presence rows"
-        assert control._deliver_lan_private_message("Moio9", "hello") == 0, "self alias delivered a private LAN message"
+        assert control._deliver_lobby_private_message("Moio9", "hello") == 0, "self alias delivered a private LAN message"
         lan_handler._disconnect_reason = "test_cleanup"
         lan_handler._on_disconnect()
     finally:
@@ -526,7 +526,7 @@ def assert_control_same_game_presence_suppressed():
         os.unlink(cfg_path)
 
 
-def assert_lan_lobby_online_who_suppressed_for_game_handlers():
+def assert_lobby_lobby_online_who_suppressed_for_game_handlers():
     from server import GameServer
     from user_manager import User
     from client_handler import ClientHandler
@@ -581,7 +581,7 @@ def assert_lan_lobby_online_who_suppressed_for_game_handlers():
         guest.game = 0
         guest.stat = "LOBBY"
 
-        hguest._lan_broadcast_online_who(guest, delay_s=0, exclude_uid=guest.uid)
+        hguest._lobby_broadcast_online_who(guest, delay_s=0, exclude_uid=guest.uid)
         time.sleep(0.05)
 
         assert b"+who" not in host.conn.sent, f"lobby online-who leaked to in-game host: {host.conn.sent!r}"
@@ -597,7 +597,7 @@ def assert_lan_lobby_online_who_suppressed_for_game_handlers():
         os.unlink(cfg_path)
 
 
-def assert_lan_host_left_resets_peer_game_state():
+def assert_lobby_host_left_resets_peer_game_state():
     from server import GameServer
     from user_manager import User
     from client_handler import ClientHandler
@@ -649,7 +649,7 @@ def assert_lan_host_left_resets_peer_game_state():
 
         peer.conn.sent.clear()
         removed_game, removed = srv.games.leave(game.id, host.uid)
-        hhost._lan_on_game_departure(removed_game, departed_uid=host.uid, removed=removed, delay_s=0)
+        hhost._lobby_on_game_departure(removed_game, departed_uid=host.uid, removed=removed, delay_s=0)
         time.sleep(0.10)
 
         assert removed, "host leave did not remove open game"
@@ -678,7 +678,7 @@ def assert_lan_host_left_resets_peer_game_state():
         os.unlink(cfg_path)
 
 
-def assert_lan_delayed_lobby_snapshot_does_not_resurrect_removed_game():
+def assert_lobby_delayed_lobby_snapshot_does_not_resurrect_removed_game():
     from server import GameServer
     from user_manager import User
     from client_handler import ClientHandler
@@ -726,13 +726,13 @@ def assert_lan_delayed_lobby_snapshot_does_not_resurrect_removed_game():
         host.stat = "GAME"
         peer.stat = "LOBBY"
 
-        hhost._lan_broadcast_lobby_snapshot(delay_s=0.05, exclude_uid=host.uid, with_gcm=True)
+        hhost._lobby_broadcast_lobby_snapshot(delay_s=0.05, exclude_uid=host.uid, with_gcm=True)
         time.sleep(0.01)
 
         removed_game, removed = srv.games.leave(game.id, host.uid)
         host.game = 0
         host.stat = "LOBBY"
-        hhost._lan_on_game_departure(removed_game, departed_uid=host.uid, removed=removed, delay_s=0)
+        hhost._lobby_on_game_departure(removed_game, departed_uid=host.uid, removed=removed, delay_s=0)
         time.sleep(0.14)
 
         frames = ClientHandler._extract_20922_messages(bytearray(peer.conn.sent))
@@ -763,7 +763,7 @@ def assert_lan_delayed_lobby_snapshot_does_not_resurrect_removed_game():
         os.unlink(cfg_path)
 
 
-def assert_lan_removed_unrelated_game_does_not_snapshot_active_host():
+def assert_lobby_removed_unrelated_game_does_not_snapshot_active_host():
     from server import GameServer
     from user_manager import User
     from client_handler import ClientHandler
@@ -825,7 +825,7 @@ def assert_lan_removed_unrelated_game_does_not_snapshot_active_host():
         removed_game, removed = srv.games.leave(old_game.id, old_host.uid)
         old_host.game = 0
         old_host.stat = "LOBBY"
-        hold._lan_on_game_departure(removed_game, departed_uid=old_host.uid, removed=removed, delay_s=0)
+        hold._lobby_on_game_departure(removed_game, departed_uid=old_host.uid, removed=removed, delay_s=0)
         time.sleep(0.08)
 
         active_sent = bytes(new_host.conn.sent)
@@ -843,7 +843,7 @@ def assert_lan_removed_unrelated_game_does_not_snapshot_active_host():
         os.unlink(cfg_path)
 
 
-def assert_lan_gset_for_removed_room_returns_reset():
+def assert_lobby_gset_for_removed_room_returns_reset():
     from server import GameServer
     from user_manager import User
     from client_handler import ClientHandler
@@ -905,7 +905,7 @@ def assert_lan_gset_for_removed_room_returns_reset():
         os.unlink(cfg_path)
 
 
-def assert_lan_gset_for_recent_removed_room_reinvalidates_room():
+def assert_lobby_gset_for_recent_removed_room_reinvalidates_room():
     from server import GameServer
     from user_manager import User
     from client_handler import ClientHandler
@@ -956,7 +956,7 @@ def assert_lan_gset_for_recent_removed_room_reinvalidates_room():
         peer.stat = "GAME"
 
         removed_game, removed = srv.games.leave(game.id, host.uid)
-        hhost._lan_on_game_departure(removed_game, departed_uid=host.uid, removed=removed, delay_s=0)
+        hhost._lobby_on_game_departure(removed_game, departed_uid=host.uid, removed=removed, delay_s=0)
         time.sleep(0.08)
         peer.conn.sent.clear()
 
@@ -1010,7 +1010,7 @@ def assert_lan_gset_for_recent_removed_room_reinvalidates_room():
         os.unlink(cfg_path)
 
 
-def assert_lan_kick_delayed_update_does_not_override_new_room():
+def assert_lobby_kick_delayed_update_does_not_override_new_room():
     from server import GameServer
     from user_manager import User
     from client_handler import ClientHandler
@@ -1096,7 +1096,7 @@ def assert_lan_kick_delayed_update_does_not_override_new_room():
         os.unlink(cfg_path)
 
 
-def assert_lan_active_game_peer_close_preserves_detached_user():
+def assert_lobby_active_game_peer_close_preserves_detached_user():
     from server import GameServer
     from user_manager import User
     from client_handler import ClientHandler
@@ -1149,7 +1149,7 @@ def assert_lan_active_game_peer_close_preserves_detached_user():
         os.unlink(cfg_path)
 
 
-def assert_lan_same_ip_detached_reconnect_replaces_only_matching_persona():
+def assert_lobby_same_ip_detached_reconnect_replaces_only_matching_persona():
     from server import GameServer
     from user_manager import User
     from client_handler import ClientHandler
@@ -1234,7 +1234,7 @@ def assert_lan_same_ip_detached_reconnect_replaces_only_matching_persona():
         os.unlink(cfg_path)
 
 
-def assert_lan_reattached_active_game_gsea_finalizes_lobby():
+def assert_lobby_reattached_active_game_gsea_finalizes_lobby():
     from server import GameServer
     from user_manager import User
     from client_handler import ClientHandler
@@ -1414,9 +1414,9 @@ def assert_ready_snapshot_does_not_duplicate_solo_host():
         assert srv.games.join(game.id, host.uid)
         host.game = game.id
         host.stat = "GAME"
-        handler._lan_remember_game_user(game, host)
+        handler._lobby_remember_game_user(game, host)
 
-        fields = handler._lan_game_ready_snapshot_fields(
+        fields = handler._lobby_game_ready_snapshot_fields(
             game,
             viewer_uid=int(host.uid),
             tunnel_addrs=True,
@@ -1460,16 +1460,16 @@ def assert_duplicate_gset_ready_deduped():
             PORT=0
             CONTROL_PORT=0
             CONTROL_LISTEN_PORT=0
-            LAN_GSET_DEDUPE_WINDOW=0.5
-            LAN_READY_NOTIFY_PEERS=1
+            LOBBY_GSET_DEDUPE_WINDOW=0.5
+            LOBBY_READY_NOTIFY_PEERS=1
         """))
         cfg_path = cfg.name
 
     try:
         srv = GameServer(cfg_path)
         srv.is_running = True
-        srv.cfg["LAN_GSET_DEDUPE_WINDOW"] = 0.5
-        srv.cfg["LAN_READY_NOTIFY_PEERS"] = 1
+        srv.cfg["LOBBY_GSET_DEDUPE_WINDOW"] = 0.5
+        srv.cfg["LOBBY_READY_NOTIFY_PEERS"] = 1
         host = User(DummyConn(), ("127.0.0.1", 1111), name="Moio9")
         host.pers = "Moio"
         peer = User(DummyConn(), ("127.0.0.1", 1112), name="Juc")
@@ -1555,10 +1555,10 @@ def assert_room_snapshot_partition_fields_follow_numpart():
         host.stat = "GAME"
         peer.game = game.id
         peer.stat = "GAME"
-        hhost._lan_remember_game_user(game, host)
-        hpeer._lan_remember_game_user(game, peer)
+        hhost._lobby_remember_game_user(game, host)
+        hpeer._lobby_remember_game_user(game, peer)
 
-        ready_fields = hpeer._lan_game_ready_snapshot_fields(
+        ready_fields = hpeer._lobby_game_ready_snapshot_fields(
             game,
             viewer_uid=int(peer.uid),
             tunnel_addrs=True,
@@ -1577,11 +1577,11 @@ def assert_room_snapshot_partition_fields_follow_numpart():
         assert ready_map["OPPARAM0"] == "" and ready_map["OPPARAM1"] == "", f"ready snapshot OPPARAMs should stay empty like stock LAN: {ready_fields!r}"
         _assert_stock_game_field_order(ready_fields, "ready snapshot")
 
-        room_fields = hpeer._lan_game_reply_fields(
+        room_fields = hpeer._lobby_game_reply_fields(
             game,
-            params=hpeer._lan_game_params(game),
-            custflags=hpeer._lan_game_custflags(game),
-            sysflags=hpeer._lan_game_sysflags(game),
+            params=hpeer._lobby_game_params(game),
+            custflags=hpeer._lobby_game_custflags(game),
+            sysflags=hpeer._lobby_game_sysflags(game),
             tunnel_addrs=True,
         )
         room_text = "\n".join(room_fields)
@@ -1599,7 +1599,7 @@ def assert_room_snapshot_partition_fields_follow_numpart():
         assert room_map["OPPARAM0"] == "" and room_map["OPPARAM1"] == "", f"room snapshot OPPARAMs should stay empty like stock LAN: {room_fields!r}"
         _assert_stock_game_field_order(room_fields, "room snapshot")
 
-        gsta_fields = hpeer._lan_gsta_feed_fields(
+        gsta_fields = hpeer._lobby_gsta_feed_fields(
             game,
             viewer_uid=int(peer.uid),
             tunnel_addrs=True,
@@ -1614,7 +1614,7 @@ def assert_room_snapshot_partition_fields_follow_numpart():
         )
 
         onln_text = "\n".join(
-            hpeer._lan_onln_fields_for_user(peer, game, viewer_uid=int(peer.uid))
+            hpeer._lobby_onln_fields_for_user(peer, game, viewer_uid=int(peer.uid))
         )
         assert "M=Juc" in onln_text and "N=Jucator" in onln_text, f"onln M/N mapping mismatch: {onln_text!r}"
         assert "F=U" in onln_text, f"normal onln game flag mismatch: {onln_text!r}"
@@ -1674,7 +1674,7 @@ def assert_onln_pers_display_alias_resolves_self():
         peer.game = game.id
         host.stat = "GAME"
         peer.stat = "GAME"
-        resolved = hpeer._lan_resolve_onln_target(game, "", "Juc", peer)
+        resolved = hpeer._lobby_resolve_onln_target(game, "", "Juc", peer)
         assert int(getattr(resolved, "uid", 0) or 0) == int(peer.uid), "onln PERS display alias resolved to the wrong user"
         hpeer._disconnect_reason = "test_cleanup"
         hpeer._on_disconnect()
@@ -1682,7 +1682,7 @@ def assert_onln_pers_display_alias_resolves_self():
         os.unlink(cfg_path)
 
 
-def assert_lan_private_message_to_self_ignored():
+def assert_lobby_private_message_to_self_ignored():
     from server import GameServer
     from user_manager import User
     from client_handler import ClientHandler
@@ -1731,28 +1731,28 @@ def assert_lan_private_message_to_self_ignored():
         os.unlink(cfg_path)
 
 
-def assert_lan_auth_accounts():
+def assert_lobby_auth_accounts():
     from server import GameServer
     from client_handler import (
         ClientHandler,
-        _LAN_AUTH_BLAK_RESERVED,
-        _LAN_AUTH_DBER_RESERVED,
-        _LAN_AUTH_FILT_RESERVED,
-        _LAN_AUTH_IKEY_RESERVED,
-        _LAN_AUTH_IMST_RESERVED,
-        _LAN_AUTH_LOCK_RESERVED,
-        _LAN_AUTH_LOGN_RESERVED,
-        _LAN_AUTH_MISS_RESERVED,
-        _LAN_AUTH_OVER_RESERVED,
-        _LAN_AUTH_PASS_RESERVED,
-        _LAN_AUTH_SHAR_RESERVED,
-        _LAN_AUTH_TIME_RESERVED,
-        _LAN_AUTH_TOSA_RESERVED,
-        _LAN_DUPL_RESERVED,
-        _LAN_INVP_RESERVED,
-        _LAN_MAUT_RESERVED,
-        _LAN_NSPC_RESERVED,
-        _LAN_PSET_RESERVED,
+        _LOBBY_AUTH_BLAK_RESERVED,
+        _LOBBY_AUTH_DBER_RESERVED,
+        _LOBBY_AUTH_FILT_RESERVED,
+        _LOBBY_AUTH_IKEY_RESERVED,
+        _LOBBY_AUTH_IMST_RESERVED,
+        _LOBBY_AUTH_LOCK_RESERVED,
+        _LOBBY_AUTH_LOGN_RESERVED,
+        _LOBBY_AUTH_MISS_RESERVED,
+        _LOBBY_AUTH_OVER_RESERVED,
+        _LOBBY_AUTH_PASS_RESERVED,
+        _LOBBY_AUTH_SHAR_RESERVED,
+        _LOBBY_AUTH_TIME_RESERVED,
+        _LOBBY_AUTH_TOSA_RESERVED,
+        _LOBBY_DUPL_RESERVED,
+        _LOBBY_INVP_RESERVED,
+        _LOBBY_MAUT_RESERVED,
+        _LOBBY_NSPC_RESERVED,
+        _LOBBY_PSET_RESERVED,
     )
     from user_manager import User
     import hashlib
@@ -1777,37 +1777,37 @@ def assert_lan_auth_accounts():
         "auth",
         b"\x00",
         9,
-        reserved_be32=_LAN_AUTH_IMST_RESERVED,
+        reserved_be32=_LOBBY_AUTH_IMST_RESERVED,
     )
     assert reject_frame.hex() == "61757468696d737400000015009923473ef4a469ec"
     same_account_frame = ClientHandler._make_20922_signed_binary_message(
         "auth",
         b"\x00",
         9,
-        reserved_be32=_LAN_AUTH_LOGN_RESERVED,
+        reserved_be32=_LOBBY_AUTH_LOGN_RESERVED,
     )
     assert same_account_frame.hex() == "617574686c6f676e000000150096e49ef9335271f3"
     bad_password_frame = ClientHandler._make_20922_signed_binary_message(
         "auth",
         b"\x00",
         9,
-        reserved_be32=_LAN_AUTH_PASS_RESERVED,
+        reserved_be32=_LOBBY_AUTH_PASS_RESERVED,
     )
     assert bad_password_frame.hex() == "61757468706173730000001500b25e82f94d72cd14"
     auth_code_cases = {
-        "imst": ("unknown_account", _LAN_AUTH_IMST_RESERVED),
-        "logn": ("account_in_use", _LAN_AUTH_LOGN_RESERVED),
-        "lock": ("account_locked", _LAN_AUTH_LOCK_RESERVED),
-        "pass": ("bad_password", _LAN_AUTH_PASS_RESERVED),
-        "ikey": ("invalid_key", _LAN_AUTH_IKEY_RESERVED),
-        "tosa": ("tos_not_accepted", _LAN_AUTH_TOSA_RESERVED),
-        "dber": ("database_error", _LAN_AUTH_DBER_RESERVED),
-        "blak": ("blacklisted", _LAN_AUTH_BLAK_RESERVED),
-        "shar": ("share_not_accepted", _LAN_AUTH_SHAR_RESERVED),
-        "miss": ("missing_fields", _LAN_AUTH_MISS_RESERVED),
-        "filt": ("filtered", _LAN_AUTH_FILT_RESERVED),
-        "time": ("auth_timeout", _LAN_AUTH_TIME_RESERVED),
-        "over": ("invalid_state", _LAN_AUTH_OVER_RESERVED),
+        "imst": ("unknown_account", _LOBBY_AUTH_IMST_RESERVED),
+        "logn": ("account_in_use", _LOBBY_AUTH_LOGN_RESERVED),
+        "lock": ("account_locked", _LOBBY_AUTH_LOCK_RESERVED),
+        "pass": ("bad_password", _LOBBY_AUTH_PASS_RESERVED),
+        "ikey": ("invalid_key", _LOBBY_AUTH_IKEY_RESERVED),
+        "tosa": ("tos_not_accepted", _LOBBY_AUTH_TOSA_RESERVED),
+        "dber": ("database_error", _LOBBY_AUTH_DBER_RESERVED),
+        "blak": ("blacklisted", _LOBBY_AUTH_BLAK_RESERVED),
+        "shar": ("share_not_accepted", _LOBBY_AUTH_SHAR_RESERVED),
+        "miss": ("missing_fields", _LOBBY_AUTH_MISS_RESERVED),
+        "filt": ("filtered", _LOBBY_AUTH_FILT_RESERVED),
+        "time": ("auth_timeout", _LOBBY_AUTH_TIME_RESERVED),
+        "over": ("invalid_state", _LOBBY_AUTH_OVER_RESERVED),
     }
     for code, (reason, reserved) in auth_code_cases.items():
         frame = ClientHandler._make_20922_signed_binary_message(
@@ -1817,30 +1817,30 @@ def assert_lan_auth_accounts():
             reserved_be32=reserved,
         )
         assert frame[:8] == b"auth" + code.encode("ascii"), f"auth{code} frame header mismatch"
-        assert ClientHandler._lan_auth_reject_reserved(reason) == reserved, f"{reason} did not map to auth{code}"
-    assert ClientHandler._lan_auth_reject_reserved("admin_ban") == _LAN_AUTH_BLAK_RESERVED
-    assert ClientHandler._lan_auth_reject_reserved("banned") == _LAN_AUTH_BLAK_RESERVED
+        assert ClientHandler._lobby_auth_reject_reserved(reason) == reserved, f"{reason} did not map to auth{code}"
+    assert ClientHandler._lobby_auth_reject_reserved("admin_ban") == _LOBBY_AUTH_BLAK_RESERVED
+    assert ClientHandler._lobby_auth_reject_reserved("banned") == _LOBBY_AUTH_BLAK_RESERVED
     account_exists_frame = ClientHandler._make_20922_signed_binary_message(
         "acct",
         b"\x00",
         9,
-        reserved_be32=_LAN_DUPL_RESERVED,
+        reserved_be32=_LOBBY_DUPL_RESERVED,
     )
     assert account_exists_frame.hex() == "616363746475706c0000001500fe4bd474a5f2be8c"
     persona_duplicate_frame = ClientHandler._make_20922_signed_binary_message(
         "cper",
         b"\x00",
         9,
-        reserved_be32=_LAN_DUPL_RESERVED,
+        reserved_be32=_LOBBY_DUPL_RESERVED,
     )
     assert persona_duplicate_frame.hex() == "637065726475706c00000015005addab04990cd909"
     persona_code_cases = {
-        "cperdupl": ("cper", "dupl", _LAN_DUPL_RESERVED),
-        "cperinvp": ("cper", "invp", _LAN_INVP_RESERVED),
-        "cpernspc": ("cper", "nspc", _LAN_NSPC_RESERVED),
-        "persinvp": ("pers", "invp", _LAN_INVP_RESERVED),
-        "persmaut": ("pers", "maut", _LAN_MAUT_RESERVED),
-        "perspset": ("pers", "pset", _LAN_PSET_RESERVED),
+        "cperdupl": ("cper", "dupl", _LOBBY_DUPL_RESERVED),
+        "cperinvp": ("cper", "invp", _LOBBY_INVP_RESERVED),
+        "cpernspc": ("cper", "nspc", _LOBBY_NSPC_RESERVED),
+        "persinvp": ("pers", "invp", _LOBBY_INVP_RESERVED),
+        "persmaut": ("pers", "maut", _LOBBY_MAUT_RESERVED),
+        "perspset": ("pers", "pset", _LOBBY_PSET_RESERVED),
     }
     for label, (cmd4, reason, reserved) in persona_code_cases.items():
         frame = ClientHandler._make_20922_signed_binary_message(
@@ -1850,7 +1850,7 @@ def assert_lan_auth_accounts():
             reserved_be32=reserved,
         )
         assert frame[:8] == label.encode("ascii"), f"{label} frame header mismatch"
-        assert ClientHandler._lan_persona_reject_reserved(reason) == reserved, f"{reason} did not map to {label}"
+        assert ClientHandler._lobby_persona_reject_reserved(reason) == reserved, f"{reason} did not map to {label}"
 
     with tempfile.TemporaryDirectory() as root:
         accounts_path = os.path.join(root, "auth_accounts.json")
@@ -1907,13 +1907,13 @@ def assert_lan_auth_accounts():
             fh.write(textwrap.dedent(f"""\
                 CONTROL_LISTEN_PORT=0
                 CONTROL_PORT=0
-                LAN_AUTH_VERIFY=1
-                LAN_AUTH_MODE=password
-                LAN_AUTH_CAPTURE=0
-                LAN_AUTH_CAPTURE_FILE={captures_path}
-                LAN_AUTH_AUTO_ENROLL=0
-                LAN_AUTH_ALLOW_CREATE=0
-                LAN_AUTH_ACCOUNTS_FILE={accounts_path}
+                AUTH_VERIFY=1
+                AUTH_MODE=password
+                AUTH_CAPTURE=0
+                AUTH_CAPTURE_FILE={captures_path}
+                AUTH_AUTO_ENROLL=0
+                AUTH_ALLOW_CREATE=0
+                AUTH_ACCOUNTS_FILE={accounts_path}
             """))
 
         srv = GameServer(cfg_path)
@@ -1932,53 +1932,53 @@ def assert_lan_auth_accounts():
         assert "cpernspc" in listed, f"pending personacode not listed: {listed!r}"
         cleared = srv._run_admin_command("personacode clear")
         assert "cleared 1" in cleared, f"personacode clear failed: {cleared!r}"
-        token = GameServer._lan_auth_make_pass_token("clear-pass", "mask-a")
+        token = GameServer._auth_make_pass_token("clear-pass", "mask-a")
         assert token.startswith("$")
-        assert GameServer._lan_auth_decode_pass_token(token, "mask-a") == "clear-pass"
-        ok, reason, account, ident = srv.authenticate_lan_login({"NAME": "ClearUser", "PASS": token, "MASK": "mask-a"})
+        assert GameServer._auth_decode_pass_token(token, "mask-a") == "clear-pass"
+        ok, reason, account, ident = srv.authenticate_login({"NAME": "ClearUser", "PASS": token, "MASK": "mask-a"})
         assert ok and reason == "ok" and account.get("name") == "ClearUser" and ident == "ClearUser"
-        token = GameServer._lan_auth_make_pass_token("clear-pass", "mask-b")
-        ok, reason, account, ident = srv.authenticate_lan_login({"NAME": "ClearUser", "PASS": token, "MASK": "mask-b"})
+        token = GameServer._auth_make_pass_token("clear-pass", "mask-b")
+        ok, reason, account, ident = srv.authenticate_login({"NAME": "ClearUser", "PASS": token, "MASK": "mask-b"})
         assert ok and reason == "ok" and account.get("name") == "ClearUser" and ident == "ClearUser"
-        legacy_token = GameServer._lan_auth_make_pass_token("legacy-pass", "old-mask")
+        legacy_token = GameServer._auth_make_pass_token("legacy-pass", "old-mask")
         legacy_account = {
             "name": "LegacyWire",
             "aliases": ["LegacyWire"],
-            "pass_wire_pbkdf2": GameServer._lan_auth_pbkdf2_encode(legacy_token),
+            "pass_wire_pbkdf2": GameServer._auth_pbkdf2_encode(legacy_token),
         }
-        srv.cfg["LAN_AUTH_LEGACY_MASKS"] = "old-mask"
-        dynamic_token = GameServer._lan_auth_make_pass_token("legacy-pass", "new-mask")
-        assert srv._lan_auth_password_matches(legacy_account, {"PASS": dynamic_token, "MASK": "new-mask"}, dynamic_token)
-        srv.cfg["LAN_AUTH_LEGACY_MASKS"] = ""
-        ok, reason, _, ident = srv.authenticate_lan_login({"NAME": "LockedUser", "PASS": "locked-pass"})
+        srv.cfg["AUTH_LEGACY_MASKS"] = "old-mask"
+        dynamic_token = GameServer._auth_make_pass_token("legacy-pass", "new-mask")
+        assert srv._auth_password_matches(legacy_account, {"PASS": dynamic_token, "MASK": "new-mask"}, dynamic_token)
+        srv.cfg["AUTH_LEGACY_MASKS"] = ""
+        ok, reason, _, ident = srv.authenticate_login({"NAME": "LockedUser", "PASS": "locked-pass"})
         assert not ok and reason == "account_locked" and ident == "LockedUser"
-        ok, reason, _, ident = srv.authenticate_lan_login({"NAME": "KeyUser", "PASS": "key-pass", "CDKEY": "bad-key"})
+        ok, reason, _, ident = srv.authenticate_login({"NAME": "KeyUser", "PASS": "key-pass", "CDKEY": "bad-key"})
         assert not ok and reason == "invalid_key" and ident == "KeyUser"
-        ok, reason, account, ident = srv.authenticate_lan_login({"NAME": "KeyUser", "PASS": "key-pass", "CDKEY": "good-key"})
+        ok, reason, account, ident = srv.authenticate_login({"NAME": "KeyUser", "PASS": "key-pass", "CDKEY": "good-key"})
         assert ok and reason == "ok" and account.get("name") == "KeyUser" and ident == "KeyUser"
-        ok, reason, _, ident = srv.authenticate_lan_login({"NAME": "TosaUser", "PASS": "tosa-pass"})
+        ok, reason, _, ident = srv.authenticate_login({"NAME": "TosaUser", "PASS": "tosa-pass"})
         assert not ok and reason == "tos_not_accepted" and ident == "TosaUser"
-        srv.cfg["LAN_AUTH_REQUIRED_FIELDS"] = "VERS,SLUS,SKU,LANG"
-        ok, reason, _, ident = srv.authenticate_lan_login({"NAME": "Alice", "PASS": "wire-pass"})
+        srv.cfg["AUTH_REQUIRED_FIELDS"] = "VERS,SLUS,SKU,LANG"
+        ok, reason, _, ident = srv.authenticate_login({"NAME": "Alice", "PASS": "wire-pass"})
         assert not ok and reason == "missing_fields" and ident == "Alice"
-        ok, reason, account, ident = srv.authenticate_lan_login(
+        ok, reason, account, ident = srv.authenticate_login(
             {"NAME": "Alice", "PASS": "wire-pass", "VERS": "1", "SLUS": "x", "SKU": "pc", "LANG": "en"}
         )
         assert ok and reason == "ok" and account.get("name") == "Alice" and ident == "Alice"
-        srv.cfg["LAN_AUTH_REQUIRED_FIELDS"] = ""
-        srv.cfg["LAN_AUTH_REQUIRE_SHARE"] = 1
-        ok, reason, _, ident = srv.authenticate_lan_login({"NAME": "Alice", "PASS": "wire-pass"})
+        srv.cfg["AUTH_REQUIRED_FIELDS"] = ""
+        srv.cfg["AUTH_REQUIRE_SHARE"] = 1
+        ok, reason, _, ident = srv.authenticate_login({"NAME": "Alice", "PASS": "wire-pass"})
         assert not ok and reason == "share_not_accepted" and ident == "Alice"
-        srv.cfg["LAN_AUTH_REQUIRE_SHARE"] = 0
+        srv.cfg["AUTH_REQUIRE_SHARE"] = 0
         response = srv._run_admin_command("authcode blak Alice")
         assert "authblak" in response and "Alice" in response, f"authcode blak command failed: {response!r}"
-        ok, reason, _, ident = srv.authenticate_lan_login({"NAME": "Alice", "PASS": "wire-pass"})
+        ok, reason, _, ident = srv.authenticate_login({"NAME": "Alice", "PASS": "wire-pass"})
         assert not ok and reason == "blacklisted" and ident == "Alice"
-        ok, reason, account, ident = srv.authenticate_lan_login({"NAME": "Alice", "PASS": "wire-pass"})
+        ok, reason, account, ident = srv.authenticate_login({"NAME": "Alice", "PASS": "wire-pass"})
         assert ok and reason == "ok" and account.get("name") == "Alice" and ident == "Alice"
         response = srv._run_admin_command("authcode time * 2")
         assert "authtime" in response and "uses=2" in response, f"authcode time command failed: {response!r}"
-        ok, reason, _, ident = srv.authenticate_lan_login({"NAME": "Alice", "PASS": "wire-pass"})
+        ok, reason, _, ident = srv.authenticate_login({"NAME": "Alice", "PASS": "wire-pass"})
         assert not ok and reason == "auth_timeout" and ident == "Alice"
         listed = srv._run_admin_command("authcode list")
         assert "time" in listed and "auth_timeout" in listed, f"pending authcode not listed: {listed!r}"
@@ -1988,7 +1988,7 @@ def assert_lan_auth_accounts():
         assert "repeat=1" in timing and "close_delay=8.0" in timing, f"authreject slow failed: {timing!r}"
         timing = srv._run_admin_command("authreject default")
         assert "repeat=4" in timing and "close_delay=1.1" in timing, f"authreject default failed: {timing!r}"
-        ok, reason, account, ident = srv.authenticate_lan_login({"NAME": "Alice", "PASS": "wire-pass"})
+        ok, reason, account, ident = srv.authenticate_login({"NAME": "Alice", "PASS": "wire-pass"})
         assert ok and reason == "ok" and account.get("name") == "Alice" and ident == "Alice"
         with open(accounts_path, "r", encoding="utf-8") as fh:
             migrated = json.load(fh)
@@ -1998,7 +1998,7 @@ def assert_lan_auth_accounts():
         clear = migrated["users"][2]
         assert "password" not in clear
         assert str(clear.get("pass_wire_pbkdf2", "")).startswith("pbkdf2_sha256$")
-        ok, reason, _, _ = srv.authenticate_lan_login({"NAME": "Alice", "PASS": "bad"})
+        ok, reason, _, _ = srv.authenticate_login({"NAME": "Alice", "PASS": "bad"})
         assert not ok and reason == "bad_password"
         bad = User(DummyConn(), ("127.0.0.1", 10000), name="GuestBad")
         assert srv.users.add(bad)
@@ -2010,22 +2010,22 @@ def assert_lan_auth_accounts():
         consumed = hbad._consume_bootstrap_frames(bad_frame)
         assert consumed == len(bad_frame), "bad password auth frame was not consumed"
         assert bad.conn.sent[:21] == bad_password_frame, "bad password auth did not send authpass"
-        ok, reason, account, ident = srv.authenticate_lan_login({"MAIL": "hash@example.test", "PASS": "secret-wire"})
+        ok, reason, account, ident = srv.authenticate_login({"MAIL": "hash@example.test", "PASS": "secret-wire"})
         assert ok and reason == "ok" and account.get("name") == "HashUser" and ident == "hash@example.test"
 
-        srv.cfg["LAN_AUTH_FAIL_LIMIT"] = 2
-        srv.cfg["LAN_AUTH_LOCKOUT_SECONDS"] = 60
-        ok, reason, _, _ = srv.authenticate_lan_login({"NAME": "HashUser", "PASS": "wrong-1"})
+        srv.cfg["AUTH_FAIL_LIMIT"] = 2
+        srv.cfg["AUTH_LOCKOUT_SECONDS"] = 60
+        ok, reason, _, _ = srv.authenticate_login({"NAME": "HashUser", "PASS": "wrong-1"})
         assert not ok and reason == "bad_password"
-        ok, reason, _, _ = srv.authenticate_lan_login({"NAME": "HashUser", "PASS": "wrong-2"})
+        ok, reason, _, _ = srv.authenticate_login({"NAME": "HashUser", "PASS": "wrong-2"})
         assert not ok and reason == "bad_password"
-        ok, reason, _, _ = srv.authenticate_lan_login({"NAME": "HashUser", "PASS": "secret-wire"})
+        ok, reason, _, _ = srv.authenticate_login({"NAME": "HashUser", "PASS": "secret-wire"})
         assert not ok and reason == "rate_limited"
-        srv._lan_auth_failures.clear()
-        srv.cfg["LAN_AUTH_FAIL_LIMIT"] = 5
+        srv._auth_failures.clear()
+        srv.cfg["AUTH_FAIL_LIMIT"] = 5
 
-        srv.cfg["LAN_AUTH_MODE"] = "account"
-        ok, reason, account, ident = srv.authenticate_lan_login({"NAME": "Alice"})
+        srv.cfg["AUTH_MODE"] = "account"
+        ok, reason, account, ident = srv.authenticate_login({"NAME": "Alice"})
         assert ok and reason == "ok" and account.get("name") == "Alice" and ident == "Alice"
 
         active = User(DummyConn(), ("127.0.0.1", 10001), name="Alice")
@@ -2052,9 +2052,9 @@ def assert_lan_auth_accounts():
         assert persona_dup.connected, "duplicate cper should not disconnect the client"
         assert persona_dup.pers != "Alice", "duplicate cper claimed an already active persona"
 
-        srv.cfg["LAN_AUTH_VERIFY"] = 0
-        srv.cfg["LAN_AUTH_CAPTURE"] = 1
-        ok, reason, _, ident = srv.authenticate_lan_login({"NAME": "Captured", "PASS": "cap-wire", "PSES": "abc"})
+        srv.cfg["AUTH_VERIFY"] = 0
+        srv.cfg["AUTH_CAPTURE"] = 1
+        ok, reason, _, ident = srv.authenticate_login({"NAME": "Captured", "PASS": "cap-wire", "PSES": "abc"})
         assert ok and reason == "disabled" and ident == "Captured"
         with open(captures_path, "r", encoding="utf-8") as fh:
             capture = json.loads(fh.readline())
@@ -2066,12 +2066,12 @@ def assert_lan_auth_accounts():
         assert capture["fields"]["PSES"] == "abc"
 
         os.unlink(accounts_path)
-        srv.cfg["LAN_AUTH_VERIFY"] = 1
-        srv.cfg["LAN_AUTH_MODE"] = "password"
-        srv.cfg["LAN_AUTH_CAPTURE"] = 0
-        srv.cfg["LAN_AUTH_AUTO_ENROLL"] = 1
-        new_token = GameServer._lan_auth_make_pass_token("new-wire", "new-mask")
-        ok, reason, account, ident = srv.authenticate_lan_login(
+        srv.cfg["AUTH_VERIFY"] = 1
+        srv.cfg["AUTH_MODE"] = "password"
+        srv.cfg["AUTH_CAPTURE"] = 0
+        srv.cfg["AUTH_AUTO_ENROLL"] = 1
+        new_token = GameServer._auth_make_pass_token("new-wire", "new-mask")
+        ok, reason, account, ident = srv.authenticate_login(
             {"NAME": "NewUser", "PASS": new_token, "MASK": "new-mask", "MAIL": "new@example.test"}
         )
         assert ok and reason == "enrolled" and account.get("name") == "NewUser" and ident == "new@example.test"
@@ -2080,24 +2080,24 @@ def assert_lan_auth_accounts():
         assert "pass_wire" not in saved["users"][0]
         assert str(saved["users"][0].get("password_pbkdf2", "")).startswith("pbkdf2_sha256$")
         assert "new@example.test" in saved["users"][0]["aliases"]
-        new_token = GameServer._lan_auth_make_pass_token("new-wire", "new-mask-2")
-        ok, reason, account, ident = srv.authenticate_lan_login(
+        new_token = GameServer._auth_make_pass_token("new-wire", "new-mask-2")
+        ok, reason, account, ident = srv.authenticate_login(
             {"NAME": "NewUser", "PASS": new_token, "MASK": "new-mask-2"}
         )
         assert ok and reason == "ok" and account.get("name") == "NewUser" and ident == "NewUser"
 
         os.unlink(accounts_path)
-        srv.cfg["LAN_AUTH_AUTO_ENROLL"] = 0
-        ok, reason, _, ident = srv.create_lan_account(
+        srv.cfg["AUTH_AUTO_ENROLL"] = 0
+        ok, reason, _, ident = srv.create_account(
             {"NAME": "BlockedCreate", "PASS": "blocked-wire"}
         )
         assert not ok and reason == "create_disabled" and ident == "BlockedCreate"
 
-        srv.cfg["LAN_AUTH_ALLOW_CREATE"] = 1
+        srv.cfg["AUTH_ALLOW_CREATE"] = 1
         created = User(DummyConn(), ("127.0.0.1", 10004), name="GuestCreate")
         assert srv.users.add(created)
         hcreated = ClientHandler(srv, created)
-        created_token = GameServer._lan_auth_make_pass_token("created-wire", "acct-mask")
+        created_token = GameServer._auth_make_pass_token("created-wire", "acct-mask")
         acct_frame = ClientHandler._make_20922_tab_message(
             "acct",
             [
@@ -2110,8 +2110,8 @@ def assert_lan_auth_accounts():
         consumed = hcreated._consume_bootstrap_frames(acct_frame)
         assert consumed == len(acct_frame), "acct frame was not consumed"
         assert created.conn.sent[:4] == b"acct", "acct did not send account-create ack"
-        created_token = GameServer._lan_auth_make_pass_token("created-wire", "acct-mask-2")
-        ok, reason, account, ident = srv.authenticate_lan_login(
+        created_token = GameServer._auth_make_pass_token("created-wire", "acct-mask-2")
+        ok, reason, account, ident = srv.authenticate_login(
             {"NAME": "CreatedUser", "PASS": created_token, "MASK": "acct-mask-2"}
         )
         assert ok and reason == "ok" and account.get("name") == "CreatedUser" and ident == "CreatedUser"
@@ -2148,7 +2148,7 @@ def assert_lan_auth_accounts():
             "cper",
             b"\x00",
             9,
-            reserved_be32=_LAN_INVP_RESERVED,
+            reserved_be32=_LOBBY_INVP_RESERVED,
         )
         assert forced_persona.conn.sent[:21] == expected_cperinvp, "forced cper did not send cperinvp"
         assert forced_persona.pers != "BadPersona", "forced rejected cper still claimed persona"
@@ -2167,13 +2167,13 @@ def assert_lan_auth_accounts():
             "pers",
             b"\x00",
             9,
-            reserved_be32=_LAN_MAUT_RESERVED,
+            reserved_be32=_LOBBY_MAUT_RESERVED,
         )
         assert forced_select.conn.sent[:21] == expected_persmaut, "forced pers did not send persmaut"
         assert forced_select.pers != "SelectedPersona", "forced rejected pers still claimed persona"
 
 
-def assert_lan_stats_snap_offsets():
+def assert_lobby_stats_snap_offsets():
     from server import GameServer
     from client_handler import ClientHandler
     from user_manager import User
@@ -2208,16 +2208,17 @@ def assert_lan_stats_snap_offsets():
         assert srv.users.add(user)
         handler = ClientHandler(srv, user)
 
-        assert ClientHandler._lan_race_category_from_fields({}, "TRACK%3d4000%0aDIR%3d0") == 1
-        assert ClientHandler._lan_race_category_from_fields({"RACETYPE": "0"}, "") == 1
-        assert ClientHandler._lan_race_category_from_fields({"TYPE": "3"}, "") == 4
-        assert ClientHandler._lan_cust_mode_bit_from_fields({}, "MODE%3d8") == 0x02000000
-        assert ClientHandler._lan_cust_mode_bit_from_fields({}, "MODE%3d4") == 0x80000000
-        assert ClientHandler._lan_cust_mode_bit_from_fields({}, "MODE%3d5") == 0x40000000
-        assert ClientHandler._lan_cust_mode_bit_from_fields({}, "MODE%3d10") == 0x40000000
-        assert ClientHandler._lan_cust_mode_bit_from_fields({}, "TYPE%3dStreet+X") == 0x80000000
-        assert ClientHandler._lan_cust_mode_bit_from_fields({}, "TYPE%3dURL") == 0x40000000
-        assert ClientHandler._lan_custflags_for_race_category(0x040000F1, None, params="MODE%3d8") == str(0x020000F1)
+        assert ClientHandler._lobby_race_category_from_fields({}, "TRACK%3d4000%0aDIR%3d0") == 1
+        assert ClientHandler._lobby_race_category_from_fields({"RACETYPE": "0"}, "") == 1
+        assert ClientHandler._lobby_race_category_from_fields({"TYPE": "3"}, "") == 4
+        assert ClientHandler._lobby_cust_mode_bit_from_fields({}, "MODE%3d8") == 0x02000000
+        assert ClientHandler._lobby_cust_mode_bit_from_fields({}, "MODE%3d4") == 0x80000000
+        assert ClientHandler._lobby_cust_mode_bit_from_fields({}, "MODE%3d5") == 0x40000000
+        assert ClientHandler._lobby_cust_mode_bit_from_fields({}, "MODE%3d10") == 0x40000000
+        assert ClientHandler._lobby_cust_mode_bit_from_fields({}, "TYPE%3dStreet+X") == 0x80000000
+        assert ClientHandler._lobby_cust_mode_bit_from_fields({}, "TYPE%3dURL") == 0x40000000
+        assert ClientHandler._lobby_custflags_for_race_category(0x000000F1, None, params="MODE%3d8") == str(0x020000F1)
+        assert ClientHandler._lobby_custflags_for_race_category(0x080000F1, None, params="TRACK%3d4000") == str(0x080000F1)
 
         stats_probe = StatsSystem({"STATSFILE": os.path.join(root, "probe_stats.json")})
         stats_probe.record_player_result("Bob", "WIN", category_index=1)
@@ -2232,7 +2233,7 @@ def assert_lan_stats_snap_offsets():
         )
 
         srv.stats.record_player_result("Moio", "WIN", category_index=1)
-        overall = handler._lan_snap_burst(
+        overall = handler._lobby_snap_burst(
             {"INDEX": "99", "CHAN": "1", "START": "0", "RANGE": "5", "FIND": "$"}
         ).decode("latin1", errors="ignore")
         assert "snap" in overall and "SEQN=0" in overall, f"snap ack missing: {overall!r}"
@@ -2246,7 +2247,7 @@ def assert_lan_stats_snap_offsets():
             f"overall stats row wrong: {overall!r}"
         )
 
-        circuit = handler._lan_snap_burst(
+        circuit = handler._lobby_snap_burst(
             {"INDEX": "2", "CHAN": "0", "START": "0", "RANGE": "5"}
         ).decode("latin1", errors="ignore")
         assert "P=0\t" in circuit, f"circuit row rank should be zero-based: {circuit!r}"
@@ -2254,7 +2255,7 @@ def assert_lan_stats_snap_offsets():
 
         srv.stats.record_player_result("Bob", "WIN", category_index=1)
         srv.stats.record_player_result("Bob", "WIN", category_index=1)
-        overall_alias = handler._lan_snap_burst(
+        overall_alias = handler._lobby_snap_burst(
             {"INDEX": "1", "CHAN": "6", "START": "0", "RANGE": "100"}
         ).decode("latin1", errors="ignore")
         assert "RANGE=2" in overall_alias and "COUNT=2" in overall_alias, (
@@ -2270,7 +2271,7 @@ def assert_lan_stats_snap_offsets():
             f"CHAN=6 should send the full 5x7 stats block: {overall_alias!r}"
         )
 
-        find_self = handler._lan_snap_burst(
+        find_self = handler._lobby_snap_burst(
             {"INDEX": "1", "CHAN": "12", "RANGE": "1", "FIND": "$"}
         ).decode("latin1", errors="ignore")
         assert "N=Moio" in find_self and "N=Bob" not in find_self, (
@@ -2286,7 +2287,7 @@ def assert_lan_stats_snap_offsets():
         shown = srv._run_admin_command("statshow Moio")
         assert "persona=Moio" in shown and "wins=3" in shown and "S=" in shown, f"statshow failed: {shown!r}"
 
-        url_alias = handler._lan_snap_burst(
+        url_alias = handler._lobby_snap_burst(
             {"INDEX": "51", "CHAN": "11", "START": "0", "RANGE": "100"}
         ).decode("latin1", errors="ignore")
         assert "RANGE=2" in url_alias and "COUNT=2" in url_alias, (
@@ -2296,7 +2297,7 @@ def assert_lan_stats_snap_offsets():
             f"CHAN=11 URL-style board should use high-channel stats rows: {url_alias!r}"
         )
 
-        url_find = handler._lan_snap_burst(
+        url_find = handler._lobby_snap_burst(
             {"INDEX": "51", "CHAN": "17", "RANGE": "1", "FIND": "$"}
         ).decode("latin1", errors="ignore")
         assert "N=Moio" in url_find and "P=1,1,1\t" in url_find and "S=" in url_find, (
@@ -2390,26 +2391,26 @@ def assert_room_game_privacy_password_metadata():
         assert consumed == len(gcre), "metadata gcre frame was not consumed"
         game = srv.games.get(host.game)
         assert game is not None, "metadata gcre did not create a game"
-        assert game.limit == 6 and getattr(game, "_lan_minsize", 0) == 3, f"LAN game sizing not stored: {game.to_dict()!r}"
-        assert hhost._lan_game_secret(game) == "lanpass" and not hhost._lan_game_private(game), (
+        assert game.limit == 6 and getattr(game, "_lobby_minsize", 0) == 3, f"LAN game sizing not stored: {game.to_dict()!r}"
+        assert hhost._lobby_game_secret(game) == "lanpass" and not hhost._lobby_game_private(game), (
             f"password-only LAN game should stay visible but locked: {game.to_dict()!r}"
         )
-        fields = hhost._lan_game_reply_fields(
+        fields = hhost._lobby_game_reply_fields(
             game,
-            params=hhost._lan_game_params(game),
-            custflags=hhost._lan_game_custflags(game),
-            sysflags=hhost._lan_game_sysflags(game),
+            params=hhost._lobby_game_params(game),
+            custflags=hhost._lobby_game_custflags(game),
+            sysflags=hhost._lobby_game_sysflags(game),
             tunnel_addrs=True,
         )
         joined_fields = "\t".join(fields)
         assert "MAXSIZE=6" in joined_fields and "MINSIZE=3" in joined_fields, f"LAN reply ignored dynamic size: {joined_fields!r}"
         assert "CUSTFLAGS=67108881" in joined_fields and "SYSFLAGS=327680" in joined_fields, f"LAN reply ignored dynamic flags: {joined_fields!r}"
         assert "HASPASS=1" in joined_fields and "\tPASS=" not in joined_fields, f"LAN password marker leaked PASS field: {joined_fields!r}"
-        gam_fields = "\t".join(hhost._lan_gam_fields(game, params=hhost._lan_game_params(game)))
+        gam_fields = "\t".join(hhost._lobby_gam_fields(game, params=hhost._lobby_game_params(game)))
         assert ",4000011,meta-room,meta-room" in gam_fields and ",6,3," in gam_fields, (
             f"+gam GAME csv did not use dynamic flags/size: {gam_fields!r}"
         )
-        password_snapshot = hpeer._lan_lobby_snapshot_for(peer)
+        password_snapshot = hpeer._lobby_lobby_snapshot_for(peer)
         assert b"meta-room" in password_snapshot, "password-only LAN game should stay visible in lobby"
         assert password_snapshot.count(b"+gam") == 1, f"password-only LAN game should emit one lobby row: {password_snapshot!r}"
         assert b"CUSTFLAGS=67108881" in password_snapshot and b"SYSFLAGS=327680" in password_snapshot, (
@@ -2422,7 +2423,7 @@ def assert_room_game_privacy_password_metadata():
             f"password-only LAN lobby row should use detailed +gam shape: {password_snapshot!r}"
         )
         public_search = {"SYSFLAGS": "0", "SYSMASK": str(0xC0000)}
-        assert b"meta-room" in hpeer._lan_lobby_snapshot_for(peer, search_kv=public_search), (
+        assert b"meta-room" in hpeer._lobby_lobby_snapshot_for(peer, search_kv=public_search), (
             "password-only LAN game should match public gsea search"
         )
         public_search_cust_variant = {
@@ -2431,10 +2432,10 @@ def assert_room_game_privacy_password_metadata():
             "CUSTFLAGS": "67109107",
             "CUSTMASK": str(0x3),
         }
-        assert b"meta-room" in hpeer._lan_lobby_snapshot_for(peer, search_kv=public_search_cust_variant), (
+        assert b"meta-room" in hpeer._lobby_lobby_snapshot_for(peer, search_kv=public_search_cust_variant), (
             "public LAN game should tolerate volatile low CUSTFLAGS search bits"
         )
-        allowed, reason = hpeer._lan_game_join_allowed(game, {}, invited=False)
+        allowed, reason = hpeer._lobby_game_join_allowed(game, {}, invited=False)
         assert not allowed and reason == "password", f"password LAN join without PASS unexpectedly allowed: {reason!r}"
         peer.conn.sent.clear()
         bad_gjoi = ClientHandler._make_20922_tab_message(
@@ -2473,10 +2474,10 @@ def assert_room_game_privacy_password_metadata():
         host.game = 0
         host.conn.sent.clear()
         peer.conn.sent.clear()
-        mode_mismatch_gcre = ClientHandler._make_20922_tab_message(
+        explicit_mode_gcre = ClientHandler._make_20922_tab_message(
             "gcre",
             [
-                "NAME=mode-normalized-public",
+                "NAME=explicit-mode-public",
                 "MAXSIZE=4",
                 "MINSIZE=2",
                 f"CUSTFLAGS={0x080000F1}",
@@ -2484,23 +2485,26 @@ def assert_room_game_privacy_password_metadata():
                 "PARAMS=TRACK%3d4000%0aDIR%3d0%0aLAPS%3d1",
             ],
         )
-        consumed = hhost._consume_bootstrap_frames(mode_mismatch_gcre)
-        assert consumed == len(mode_mismatch_gcre), "mode-mismatch public gcre frame was not consumed"
-        mode_game = srv.games.get(host.game)
-        assert mode_game is not None and not hhost._lan_game_private(mode_game), (
-            f"mode-mismatch public LAN game was detected as private: {mode_game.to_dict() if mode_game else None!r}"
+        consumed = hhost._consume_bootstrap_frames(explicit_mode_gcre)
+        assert consumed == len(explicit_mode_gcre), "explicit-mode public gcre frame was not consumed"
+        assert f"CUSTFLAGS={0x080000F1}".encode("ascii") in host.conn.sent, (
+            f"explicit sprint CUSTFLAGS was not echoed in gcre reply: {host.conn.sent!r}"
         )
-        assert hhost._lan_game_custflags(mode_game) == str(0x040000F1), (
-            f"TRACK=4000 did not normalize CUSTFLAGS mode to circuit: {hhost._lan_game_custflags(mode_game)!r}"
+        mode_game = srv.games.get(host.game)
+        assert mode_game is not None and not hhost._lobby_game_private(mode_game), (
+            f"explicit-mode public LAN game was detected as private: {mode_game.to_dict() if mode_game else None!r}"
+        )
+        assert hhost._lobby_game_custflags(mode_game) == str(0x080000F1), (
+            f"explicit CUSTFLAGS mode was overwritten by TRACK heuristic: {hhost._lobby_game_custflags(mode_game)!r}"
         )
         mode_search = {
             "SYSFLAGS": "0",
             "SYSMASK": str(0xC0000),
-            "CUSTFLAGS": str(0x040000F1),
-            "CUSTMASK": str(0x040001F3),
+            "CUSTFLAGS": str(0x080000F1),
+            "CUSTMASK": str(0x080001F3),
         }
-        assert b"mode-normalized-public" in hpeer._lan_lobby_snapshot_for(peer, search_kv=mode_search), (
-            "TRACK=4000 mode-normalized LAN game did not match circuit gsea search"
+        assert b"explicit-mode-public" in hpeer._lobby_lobby_snapshot_for(peer, search_kv=mode_search), (
+            "explicit sprint CUSTFLAGS LAN game did not match sprint gsea search"
         )
 
         srv.games.destroy(mode_game.id, reason="test_mode_normalized_public_done")
@@ -2521,7 +2525,7 @@ def assert_room_game_privacy_password_metadata():
         consumed = hhost._consume_bootstrap_frames(restricted_gcre)
         assert consumed == len(restricted_gcre), "restricted public gcre frame was not consumed"
         restricted_game = srv.games.get(host.game)
-        assert restricted_game is not None and not hhost._lan_game_private(restricted_game), (
+        assert restricted_game is not None and not hhost._lobby_game_private(restricted_game), (
             f"class-restricted public LAN game was detected as private: {restricted_game.to_dict() if restricted_game else None!r}"
         )
         restricted_search = {
@@ -2536,17 +2540,17 @@ def assert_room_game_privacy_password_metadata():
             "CUSTFLAGS": str(0x04000083),
             "CUSTMASK": str(0xFFFFFFFF),
         }
-        assert b"restricted-public" not in hpeer._lan_lobby_snapshot_for(peer, search_kv=restricted_search), (
+        assert b"restricted-public" not in hpeer._lobby_lobby_snapshot_for(peer, search_kv=restricted_search), (
             "class-restricted public LAN game matched unrestricted/all-class gsea search"
         )
-        assert b"restricted-public" in hpeer._lan_lobby_snapshot_for(peer, search_kv=restricted_match_search), (
+        assert b"restricted-public" in hpeer._lobby_lobby_snapshot_for(peer, search_kv=restricted_match_search), (
             "class-restricted public LAN game did not match same-class gsea search"
         )
-        srv.cfg["LAN_GSEA_CUST_FILTERS"] = 0
-        assert b"restricted-public" in hpeer._lan_lobby_snapshot_for(peer, search_kv=restricted_search), (
-            "LAN_GSEA_CUST_FILTERS=0 did not ignore CUSTFLAGS/CUSTMASK search filtering"
+        srv.cfg["LOBBY_GSEA_CUST_FILTERS"] = 0
+        assert b"restricted-public" in hpeer._lobby_lobby_snapshot_for(peer, search_kv=restricted_search), (
+            "LOBBY_GSEA_CUST_FILTERS=0 did not ignore CUSTFLAGS/CUSTMASK search filtering"
         )
-        srv.cfg["LAN_GSEA_CUST_FILTERS"] = 1
+        srv.cfg["LOBBY_GSEA_CUST_FILTERS"] = 1
 
         srv.games.destroy(restricted_game.id, reason="test_restricted_public_done")
         host.game = 0
@@ -2566,7 +2570,7 @@ def assert_room_game_privacy_password_metadata():
         consumed = hhost._consume_bootstrap_frames(extra_gcre)
         assert consumed == len(extra_gcre), "extra-flag public gcre frame was not consumed"
         extra_game = srv.games.get(host.game)
-        assert extra_game is not None and not hhost._lan_game_private(extra_game), (
+        assert extra_game is not None and not hhost._lobby_game_private(extra_game), (
             f"0x100 CUSTFLAGS public LAN game was detected as private: {extra_game.to_dict() if extra_game else None!r}"
         )
         extra_match_search = {
@@ -2577,10 +2581,10 @@ def assert_room_game_privacy_password_metadata():
             "CUSTFLAGS": str(0x040000F3),
             "CUSTMASK": str(0x1F0),
         }
-        assert b"extra-flag-public" in hpeer._lan_lobby_snapshot_for(peer, search_kv=extra_match_search), (
+        assert b"extra-flag-public" in hpeer._lobby_lobby_snapshot_for(peer, search_kv=extra_match_search), (
             "0x100 CUSTFLAGS LAN game did not match equivalent gsea search"
         )
-        assert b"extra-flag-public" not in hpeer._lan_lobby_snapshot_for(peer, search_kv=extra_mismatch_search), (
+        assert b"extra-flag-public" not in hpeer._lobby_lobby_snapshot_for(peer, search_kv=extra_mismatch_search), (
             "0x100 CUSTFLAGS LAN game ignored the gsea extra-bit filter"
         )
 
@@ -2602,22 +2606,22 @@ def assert_room_game_privacy_password_metadata():
         consumed = hhost._consume_bootstrap_frames(private_gcre)
         assert consumed == len(private_gcre), "private metadata gcre frame was not consumed"
         private_game = srv.games.get(host.game)
-        assert private_game is not None and hhost._lan_game_private(private_game), (
+        assert private_game is not None and hhost._lobby_game_private(private_game), (
             f"flag-only private LAN game was not detected: {private_game.to_dict() if private_game else None!r}"
         )
-        assert b"private-room" not in hpeer._lan_lobby_snapshot_for(peer), "flag-only private LAN game leaked to public lobby snapshot"
-        assert b"private-room" not in hpeer._lan_lobby_snapshot_for(peer, search_kv=public_search), (
+        assert b"private-room" not in hpeer._lobby_lobby_snapshot_for(peer), "flag-only private LAN game leaked to public lobby snapshot"
+        assert b"private-room" not in hpeer._lobby_lobby_snapshot_for(peer, search_kv=public_search), (
             "flag-only private LAN game leaked to public gsea search"
         )
         private_search = {"SYSFLAGS": str(0x40000), "SYSMASK": str(0xC0000)}
-        private_snapshot = hpeer._lan_lobby_snapshot_for(peer, search_kv=private_search)
+        private_snapshot = hpeer._lobby_lobby_snapshot_for(peer, search_kv=private_search)
         assert b"private-room" in private_snapshot, (
             "flag-only private LAN game did not match private gsea search"
         )
         assert b"MINSIZE=2" in private_snapshot, (
             f"private LAN game should advertise two-player start minimum: {private_snapshot!r}"
         )
-        allowed, reason = hpeer._lan_game_join_allowed(private_game, {}, invited=False)
+        allowed, reason = hpeer._lobby_game_join_allowed(private_game, {}, invited=False)
         assert allowed, f"private LAN direct join should not be blocked by private flag alone: {reason!r}"
 
 
@@ -2803,7 +2807,7 @@ def assert_control_send_friend_request():
                 CONTROL_SOCIAL_FILE={social_path}
                 CONTROL_RNOT_SELF_ENABLE=0
                 CONTROL_SOCIAL_ALL_ONLINE_ENABLE=1
-                LAN_AUTH_ACCOUNTS_FILE={accounts_path}
+                AUTH_ACCOUNTS_FILE={accounts_path}
             """))
         srv = GameServer(cfg_path)
         srv.remember_control_profile(name="AlicePers", persona="AlicePers", client_addr="127.0.0.1")
@@ -2999,7 +3003,7 @@ def assert_control_send_friend_request():
         ), f"INVT was not delivered to target: {invite_delivery!r}"
 
 
-def assert_lan_invite_pending_join():
+def assert_lobby_invite_pending_join():
     from server import GameServer
     from user_manager import User
     from client_handler import ClientHandler
@@ -3025,7 +3029,7 @@ def assert_lan_invite_pending_join():
             fh.write(textwrap.dedent("""\
                 CONTROL_LISTEN_PORT=0
                 CONTROL_PORT=0
-                LAN_INVITE_PENDING_SECONDS=90
+                LOBBY_INVITE_PENDING_SECONDS=90
             """))
 
         srv = GameServer(cfg_path)
@@ -3041,18 +3045,18 @@ def assert_lan_invite_pending_join():
         game = srv.games.create(room_id=0, host_uid=host.uid, limit=2, custom="297.Moio9")
         assert game is not None
         assert srv.games.join(game.id, host.uid)
-        hhost._lan_remember_game_user(game, host)
+        hhost._lobby_remember_game_user(game, host)
         host.game = game.id
         host.stat = "GAME"
 
-        assert hhost._lan_deliver_invite("PC2", "join")
-        assert hpeer._lan_pending_invite_game_id == game.id
+        assert hhost._lobby_deliver_invite("PC2", "join")
+        assert hpeer._lobby_pending_invite_game_id == game.id
         gjoi = ClientHandler._make_20922_tab_message("gjoi", ["NAME=297.PC2"])
         consumed = hpeer._consume_bootstrap_frames(gjoi)
         assert consumed == len(gjoi), "invite gjoi frame was not consumed"
         assert peer.game == game.id, "gjoi without IDENT did not use the pending invite game"
         assert peer.uid in game.participants, "pending invite join did not add peer to game"
-        assert hpeer._lan_pending_invite_game_id == 0, "pending invite was not cleared after join"
+        assert hpeer._lobby_pending_invite_game_id == 0, "pending invite was not cleared after join"
         assert b"gjoi" in peer.conn.sent and f"IDENT={game.id}".encode("ascii") in peer.conn.sent, "pending invite join did not ack with game fields"
 
         srv.games.leave(game.id, peer.uid)
@@ -3060,7 +3064,7 @@ def assert_lan_invite_pending_join():
         peer.game = 0
         peer.stat = "LOBBY"
         assert peer.uid in game.kicked_uids
-        assert hhost._lan_deliver_invite("PC2", "again")
+        assert hhost._lobby_deliver_invite("PC2", "again")
         assert peer.uid not in game.kicked_uids, "re-invite did not clear kicked state"
         gjoi = ClientHandler._make_20922_tab_message("gjoi", ["NAME=297.PC2"])
         consumed = hpeer._consume_bootstrap_frames(gjoi)
@@ -3086,7 +3090,7 @@ def assert_lan_invite_pending_join():
         hhost._on_disconnect()
 
 
-def assert_lan_unready_gset_only_sends_main_snapshot():
+def assert_lobby_unready_gset_only_sends_main_snapshot():
     from server import GameServer
     from user_manager import User
     from client_handler import ClientHandler
@@ -3113,8 +3117,8 @@ def assert_lan_unready_gset_only_sends_main_snapshot():
             fh.write(textwrap.dedent("""\
                 CONTROL_LISTEN_PORT=0
                 CONTROL_PORT=0
-                LAN_JOIN_MGM_DELAY=0.001
-                LAN_JOIN_NOTIFY_MGM=0
+                LOBBY_JOIN_MGM_DELAY=0.001
+                LOBBY_JOIN_NOTIFY_MGM=0
             """))
 
         srv = GameServer(cfg_path)
@@ -3135,12 +3139,12 @@ def assert_lan_unready_gset_only_sends_main_snapshot():
         host.stat = "GAME"
         peer.game = game.id
         peer.stat = "GAME"
-        hhost._lan_remember_game_user(game, host)
-        hpeer._lan_remember_game_user(game, peer)
+        hhost._lobby_remember_game_user(game, host)
+        hpeer._lobby_remember_game_user(game, peer)
 
-        hpeer._lan_emit_join_state(game, peer, delay_s=0.001)
+        hpeer._lobby_emit_join_state(game, peer, delay_s=0.001)
         time.sleep(0.02)
-        assert b"+mgm" not in host.conn.sent, "gjoi emitted an immediate host +mgm despite LAN_JOIN_NOTIFY_MGM=0"
+        assert b"+mgm" not in host.conn.sent, "gjoi emitted an immediate host +mgm despite LOBBY_JOIN_NOTIFY_MGM=0"
         host.conn.sent.clear()
         peer.conn.sent.clear()
 
@@ -3166,7 +3170,7 @@ def assert_lan_unready_gset_only_sends_main_snapshot():
         hhost._on_disconnect()
 
 
-def assert_lan_unready_gset_clears_ready():
+def assert_lobby_unready_gset_clears_ready():
     from server import GameServer
     from user_manager import User
     from client_handler import ClientHandler
@@ -3193,7 +3197,7 @@ def assert_lan_unready_gset_clears_ready():
             fh.write(textwrap.dedent("""\
                 CONTROL_LISTEN_PORT=0
                 CONTROL_PORT=0
-                LAN_READY_UNSET_GRACE=4.0
+                LOBBY_READY_UNSET_GRACE=4.0
             """))
 
         srv = GameServer(cfg_path)
@@ -3214,8 +3218,8 @@ def assert_lan_unready_gset_clears_ready():
         host.stat = "GAME"
         peer.game = game.id
         peer.stat = "GAME"
-        hhost._lan_remember_game_user(game, host)
-        hpeer._lan_remember_game_user(game, peer)
+        hhost._lobby_remember_game_user(game, host)
+        hpeer._lobby_remember_game_user(game, peer)
 
         ready_frame = ClientHandler._make_20922_tab_message(
             "gset",
@@ -3228,7 +3232,7 @@ def assert_lan_unready_gset_clears_ready():
         assert b"OPFLAG1=134217728" in peer.conn.sent, "ready reply did not carry ready OPFLAG"
         host.conn.sent.clear()
         peer.conn.sent.clear()
-        hpeer._lan_last_gset_at = 0.0
+        hpeer._lobby_last_gset_at = 0.0
 
         unready_frame = ClientHandler._make_20922_tab_message(
             "gset",
@@ -3247,7 +3251,7 @@ def assert_lan_unready_gset_clears_ready():
         hhost._on_disconnect()
 
 
-def assert_lan_uppercase_game_callbacks_use_calluser():
+def assert_lobby_uppercase_game_callbacks_use_calluser():
     from server import GameServer
     from user_manager import User
     from client_handler import ClientHandler
@@ -3291,7 +3295,7 @@ def assert_lan_uppercase_game_callbacks_use_calluser():
         assert srv.games.join(game.id, host.uid)
         host.game = game.id
         host.stat = "GAME"
-        hhost._lan_remember_game_user(game, host)
+        hhost._lobby_remember_game_user(game, host)
 
         token = 0xFFFFFB79
         body = (
@@ -3307,7 +3311,7 @@ def assert_lan_uppercase_game_callbacks_use_calluser():
         host.conn.sent.clear()
         peer.game = game.id
         peer.stat = "GAME"
-        hpeer._lan_remember_game_user(game, peer)
+        hpeer._lobby_remember_game_user(game, peer)
         ready = ClientHandler._make_20922_tab_message("gset", [f"NAME={game.custom}", "USERFLAGS=134217728"])
         consumed = hpeer._consume_bootstrap_frames(ready)
         assert consumed == len(ready), "peer ready gset was not consumed"
@@ -3332,7 +3336,7 @@ def assert_lan_uppercase_game_callbacks_use_calluser():
         hhost._on_disconnect()
 
 
-def assert_lan_onln_emits_capture_game_refresh():
+def assert_lobby_onln_emits_capture_game_refresh():
     from server import GameServer
     from user_manager import User
     from client_handler import ClientHandler
@@ -3359,7 +3363,7 @@ def assert_lan_onln_emits_capture_game_refresh():
             fh.write(textwrap.dedent("""\
                 CONTROL_LISTEN_PORT=0
                 CONTROL_PORT=0
-                LAN_JOIN_MGM_DELAY=0.001
+                LOBBY_JOIN_MGM_DELAY=0.001
             """))
 
         srv = GameServer(cfg_path)
@@ -3380,8 +3384,8 @@ def assert_lan_onln_emits_capture_game_refresh():
         host.stat = "GAME"
         peer.game = game.id
         peer.stat = "GAME"
-        hhost._lan_remember_game_user(game, host)
-        hpeer._lan_remember_game_user(game, peer)
+        hhost._lobby_remember_game_user(game, host)
+        hpeer._lobby_remember_game_user(game, peer)
 
         onln = ClientHandler._make_20922_tab_message("onln", ["PERS=Moio"])
         consumed = hpeer._consume_bootstrap_frames(onln)
@@ -3406,7 +3410,7 @@ def assert_lan_onln_emits_capture_game_refresh():
         hhost._on_disconnect()
 
 
-def assert_lan_host_duplicate_gcre_preserves_open_game():
+def assert_lobby_host_duplicate_gcre_preserves_open_game():
     from server import GameServer
     from user_manager import User
     from client_handler import ClientHandler
@@ -3453,8 +3457,8 @@ def assert_lan_host_duplicate_gcre_preserves_open_game():
         host.stat = "GAME"
         peer.game = game.id
         peer.stat = "GAME"
-        hhost._lan_remember_game_user(game, host)
-        hpeer._lan_remember_game_user(game, peer)
+        hhost._lobby_remember_game_user(game, host)
+        hpeer._lobby_remember_game_user(game, peer)
 
         before_id = game.id
         gcre = ClientHandler._make_20922_tab_message(
@@ -3484,7 +3488,7 @@ def assert_lan_host_duplicate_gcre_preserves_open_game():
         hhost._on_disconnect()
 
 
-def assert_lan_host_new_gcre_replaces_reattached_old_game():
+def assert_lobby_host_new_gcre_replaces_reattached_old_game():
     from server import GameServer
     from user_manager import User
     from client_handler import ClientHandler
@@ -3531,8 +3535,8 @@ def assert_lan_host_new_gcre_replaces_reattached_old_game():
         host.stat = "GAME"
         peer.game = old_game.id
         peer.stat = "GAME"
-        hhost._lan_remember_game_user(old_game, host)
-        hpeer._lan_remember_game_user(old_game, peer)
+        hhost._lobby_remember_game_user(old_game, host)
+        hpeer._lobby_remember_game_user(old_game, peer)
 
         gcre = ClientHandler._make_20922_tab_message(
             "gcre",
@@ -3563,7 +3567,7 @@ def assert_lan_host_new_gcre_replaces_reattached_old_game():
         hhost._on_disconnect()
 
 
-def assert_lan_special_persona_markers():
+def assert_lobby_special_persona_markers():
     from server import GameServer
     from user_manager import User
     from client_handler import ClientHandler
@@ -3589,13 +3593,13 @@ def assert_lan_special_persona_markers():
             fh.write(textwrap.dedent("""\
                 CONTROL_LISTEN_PORT=0
                 CONTROL_PORT=0
-                LAN_USER_CL=0
-                LAN_USER_RGB=0
-                LAN_ONLN_GAME_FLAG=U
-                LAN_SPECIAL_PERSONAS=Moio9
-                LAN_SPECIAL_USER_CL=511
-                LAN_SPECIAL_USER_RGB=511
-                LAN_SPECIAL_ONLN_FLAG=G
+                LOBBY_USER_CL=0
+                LOBBY_USER_RGB=0
+                LOBBY_ONLN_GAME_FLAG=U
+                LOBBY_SPECIAL_PERSONAS=Moio9
+                LOBBY_SPECIAL_USER_CL=511
+                LOBBY_SPECIAL_USER_RGB=511
+                LOBBY_SPECIAL_ONLN_FLAG=G
             """))
 
         srv = GameServer(cfg_path)
@@ -3614,10 +3618,10 @@ def assert_lan_special_persona_markers():
         admin.game = game.id
         normal.game = game.id
 
-        admin_onln = "\t".join(handler._lan_onln_fields_for_user(admin, game))
-        normal_onln = "\t".join(handler._lan_onln_fields_for_user(normal, game))
-        admin_usr = "\t".join(handler._lan_usr_fields_for_user(admin, sync=3, game_id=game.id))
-        normal_usr = "\t".join(handler._lan_usr_fields_for_user(normal, sync=3, game_id=game.id))
+        admin_onln = "\t".join(handler._lobby_onln_fields_for_user(admin, game))
+        normal_onln = "\t".join(handler._lobby_onln_fields_for_user(normal, game))
+        admin_usr = "\t".join(handler._lobby_usr_fields_for_user(admin, sync=3, game_id=game.id))
+        normal_usr = "\t".join(handler._lobby_usr_fields_for_user(normal, sync=3, game_id=game.id))
         assert "F=G" in admin_onln and "CL=511" in admin_onln, f"special onln marker missing: {admin_onln!r}"
         assert "F=U" in normal_onln and "CL=0" in normal_onln, f"normal onln marker leaked special state: {normal_onln!r}"
         assert "RGB=511" in admin_usr, f"special usr color missing: {admin_usr!r}"
@@ -3630,7 +3634,7 @@ def assert_lan_special_persona_markers():
 def assert_server_max_players_limit():
     from server import GameServer
     from user_manager import User
-    from client_handler import ClientHandler, _LAN_AUTH_DBER_RESERVED
+    from client_handler import ClientHandler, _LOBBY_AUTH_DBER_RESERVED
     import tempfile
     import textwrap
 
@@ -3677,7 +3681,7 @@ def assert_server_max_players_limit():
         consumed = lan_handler._consume_bootstrap_frames(auth)
         assert consumed == len(auth), "full LAN auth frame was not consumed"
         lan_sent = bytes(lan_user.conn.sent)
-        assert lan_sent[:4] == b"auth" and lan_sent[4:8] == (_LAN_AUTH_DBER_RESERVED & 0xFFFFFFFF).to_bytes(4, "big"), (
+        assert lan_sent[:4] == b"auth" and lan_sent[4:8] == (_LOBBY_AUTH_DBER_RESERVED & 0xFFFFFFFF).to_bytes(4, "big"), (
             f"full LAN auth did not receive dber reject: {lan_sent!r}"
         )
         assert srv.users.get(lan_user.uid) is None, "full LAN auth registered rejected user"
@@ -3700,7 +3704,7 @@ def assert_server_max_players_limit():
         consumed = preauth_handler._consume_bootstrap_frames(auth)
         assert consumed == len(auth), "full LAN auth after addr was not consumed"
         lan_sent = bytes(preauth_user.conn.sent)
-        assert lan_sent[:4] == b"auth" and lan_sent[4:8] == (_LAN_AUTH_DBER_RESERVED & 0xFFFFFFFF).to_bytes(4, "big"), (
+        assert lan_sent[:4] == b"auth" and lan_sent[4:8] == (_LOBBY_AUTH_DBER_RESERVED & 0xFFFFFFFF).to_bytes(4, "big"), (
             f"full LAN auth after addr did not receive dber reject: {lan_sent!r}"
         )
         assert srv.users.get(preauth_user.uid) is None, "full LAN auth after addr registered rejected user"
@@ -3733,10 +3737,10 @@ def assert_server_connection_rate_limit():
         assert srv._accepts_new_connection("127.0.0.1"), "rate limit disabled should allow blocked IP"
 
 
-def assert_lan_persona_blacklist():
+def assert_lobby_persona_blacklist():
     from server import GameServer
     from user_manager import User
-    from client_handler import ClientHandler, _LAN_NSPC_RESERVED, _LAN_PSET_RESERVED
+    from client_handler import ClientHandler, _LOBBY_NSPC_RESERVED, _LOBBY_PSET_RESERVED
     import tempfile
     import textwrap
 
@@ -3762,11 +3766,11 @@ def assert_lan_persona_blacklist():
             fh.write(textwrap.dedent(f"""\
                 CONTROL_LISTEN_PORT=0
                 CONTROL_PORT=0
-                LAN_PERSONA_RESERVED_NAMES=Root
-                LAN_PERSONA_FORBIDDEN_WORDS=vulgar
-                LAN_PERSONA_BLACKLIST_FILE={blacklist_path}
-                LAN_PERSONA_BLACKLIST_CPER_CODE=nspc
-                LAN_PERSONA_BLACKLIST_PERS_CODE=pset
+                PERSONA_RESERVED_NAMES=Root
+                PERSONA_FORBIDDEN_WORDS=vulgar
+                PERSONA_BLACKLIST_FILE={blacklist_path}
+                PERSONA_BLACKLIST_CPER_CODE=nspc
+                PERSONA_BLACKLIST_PERS_CODE=pset
             """))
 
         srv = GameServer(cfg_path)
@@ -3781,7 +3785,7 @@ def assert_lan_persona_blacklist():
             "cper",
             b"\x00",
             9,
-            reserved_be32=_LAN_NSPC_RESERVED,
+            reserved_be32=_LOBBY_NSPC_RESERVED,
         )
         assert cper_user.conn.sent[:21] == expected_cper, f"blacklisted cper did not send cpernspc: {cper_user.conn.sent!r}"
         assert cper_user.pers != "Admin", "blacklisted cper still claimed persona"
@@ -3796,10 +3800,53 @@ def assert_lan_persona_blacklist():
             "pers",
             b"\x00",
             9,
-            reserved_be32=_LAN_PSET_RESERVED,
+            reserved_be32=_LOBBY_PSET_RESERVED,
         )
         assert pers_user.conn.sent[:21] == expected_pers, f"blacklisted pers did not send perspset: {pers_user.conn.sent!r}"
         assert pers_user.pers != "GoodBadwordName", "blacklisted pers still claimed persona"
+
+
+def assert_lobby_probe_prelogin_callbacks_reachable():
+    from server import GameServer
+    from user_manager import User
+    from client_handler import ClientHandler
+    import tempfile
+    import textwrap
+
+    class DummyConn:
+        def __init__(self):
+            self.sent = bytearray()
+
+        def sendall(self, data):
+            self.sent.extend(data)
+
+        def shutdown(self, how):
+            pass
+
+        def close(self):
+            pass
+
+    with tempfile.TemporaryDirectory() as root:
+        cfg_path = os.path.join(root, "server.cfg")
+        with open(cfg_path, "w", encoding="utf-8") as fh:
+            fh.write(textwrap.dedent("""\
+                CONTROL_LISTEN_PORT=0
+                CONTROL_PORT=0
+            """))
+
+        srv = GameServer(cfg_path)
+        user = User(DummyConn(), ("127.0.0.1", 29001), name="ProbeUser")
+        handler = ClientHandler(srv, user)
+
+        initial_recv_state = handler._probe_recv_state
+        initial_send_state = handler._probe_send_state
+        frame = ClientHandler._make_20922_tab_message("sele", [])
+        _, encrypted = ClientHandler._rc4_apply_20921(initial_recv_state, frame)
+
+        decoded = handler._consume_probe_decrypted(encrypted)
+        assert decoded == 1, "secure probe sele frame was not decoded"
+        _, plain_reply = ClientHandler._rc4_apply_20921(initial_send_state, bytes(user.conn.sent))
+        assert plain_reply.startswith(b"sele"), f"secure probe sele reply was not sent: {plain_reply!r}"
 
 
 # ------------------------------------------------------------------ #
@@ -3837,43 +3884,43 @@ def run_tests():
     print("OK")
 
     print("[0f2] LAN lobby online-who suppressed for game handlers... ", end="")
-    assert_lan_lobby_online_who_suppressed_for_game_handlers()
+    assert_lobby_lobby_online_who_suppressed_for_game_handlers()
     print("OK")
 
     print("[0f3] LAN host-left resets peer game state... ", end="")
-    assert_lan_host_left_resets_peer_game_state()
+    assert_lobby_host_left_resets_peer_game_state()
     print("OK")
 
     print("[0f3a] LAN delayed lobby snapshot does not resurrect removed game... ", end="")
-    assert_lan_delayed_lobby_snapshot_does_not_resurrect_removed_game()
+    assert_lobby_delayed_lobby_snapshot_does_not_resurrect_removed_game()
     print("OK")
 
     print("[0f3a2] LAN unrelated removed game does not snapshot active host... ", end="")
-    assert_lan_removed_unrelated_game_does_not_snapshot_active_host()
+    assert_lobby_removed_unrelated_game_does_not_snapshot_active_host()
     print("OK")
 
     print("[0f3b] LAN GSET for removed room returns reset... ", end="")
-    assert_lan_gset_for_removed_room_returns_reset()
+    assert_lobby_gset_for_removed_room_returns_reset()
     print("OK")
 
     print("[0f3c] LAN GSET for recent removed room invalidates old room... ", end="")
-    assert_lan_gset_for_recent_removed_room_reinvalidates_room()
+    assert_lobby_gset_for_recent_removed_room_reinvalidates_room()
     print("OK")
 
     print("[0f3d] LAN delayed kick update does not override new room... ", end="")
-    assert_lan_kick_delayed_update_does_not_override_new_room()
+    assert_lobby_kick_delayed_update_does_not_override_new_room()
     print("OK")
 
     print("[0f4] LAN active peer close preserves detached user... ", end="")
-    assert_lan_active_game_peer_close_preserves_detached_user()
+    assert_lobby_active_game_peer_close_preserves_detached_user()
     print("OK")
 
     print("[0f5] LAN same-IP detached reconnect preserves other racer... ", end="")
-    assert_lan_same_ip_detached_reconnect_replaces_only_matching_persona()
+    assert_lobby_same_ip_detached_reconnect_replaces_only_matching_persona()
     print("OK")
 
     print("[0f6] LAN reattached active race gsea returns lobby... ", end="")
-    assert_lan_reattached_active_game_gsea_finalizes_lobby()
+    assert_lobby_reattached_active_game_gsea_finalizes_lobby()
     print("OK")
 
     print("[0g] GSET self-kick ignored... ", end="")
@@ -3897,15 +3944,15 @@ def run_tests():
     print("OK")
 
     print("[0l] LAN private self-message ignored... ", end="")
-    assert_lan_private_message_to_self_ignored()
+    assert_lobby_private_message_to_self_ignored()
     print("OK")
 
     print("[0m] LAN auth accounts... ", end="")
-    assert_lan_auth_accounts()
+    assert_lobby_auth_accounts()
     print("OK")
 
     print("[0m2] LAN stats snap offsets... ", end="")
-    assert_lan_stats_snap_offsets()
+    assert_lobby_stats_snap_offsets()
     print("OK")
 
     print("[0m3] Room/game privacy and password metadata... ", end="")
@@ -3921,11 +3968,11 @@ def run_tests():
     print("OK")
 
     print("[0p] LAN invite pending join... ", end="")
-    assert_lan_invite_pending_join()
+    assert_lobby_invite_pending_join()
     print("OK")
 
     print("[0q] LAN special persona markers... ", end="")
-    assert_lan_special_persona_markers()
+    assert_lobby_special_persona_markers()
     print("OK")
 
     print("[0q2] Server max players limit... ", end="")
@@ -3937,31 +3984,35 @@ def run_tests():
     print("OK")
 
     print("[0q4] LAN persona blacklist... ", end="")
-    assert_lan_persona_blacklist()
+    assert_lobby_persona_blacklist()
+    print("OK")
+
+    print("[0q5] LAN secure probe callbacks... ", end="")
+    assert_lobby_probe_prelogin_callbacks_reachable()
     print("OK")
 
     print("[0r] LAN unready GSET only sends main snapshot... ", end="")
-    assert_lan_unready_gset_only_sends_main_snapshot()
+    assert_lobby_unready_gset_only_sends_main_snapshot()
     print("OK")
 
     print("[0r2] LAN unready GSET clears ready... ", end="")
-    assert_lan_unready_gset_clears_ready()
+    assert_lobby_unready_gset_clears_ready()
     print("OK")
 
     print("[0r3] LAN uppercase callbacks use CALLUSER... ", end="")
-    assert_lan_uppercase_game_callbacks_use_calluser()
+    assert_lobby_uppercase_game_callbacks_use_calluser()
     print("OK")
 
     print("[0s] LAN ONLN emits capture game refresh... ", end="")
-    assert_lan_onln_emits_capture_game_refresh()
+    assert_lobby_onln_emits_capture_game_refresh()
     print("OK")
 
     print("[0t] LAN duplicate host GCRE preserves open game... ", end="")
-    assert_lan_host_duplicate_gcre_preserves_open_game()
+    assert_lobby_host_duplicate_gcre_preserves_open_game()
     print("OK")
 
     print("[0u] LAN new host GCRE replaces reattached old game... ", end="")
-    assert_lan_host_new_gcre_replaces_reattached_old_game()
+    assert_lobby_host_new_gcre_replaces_reattached_old_game()
     print("OK")
 
     # 1. Start server

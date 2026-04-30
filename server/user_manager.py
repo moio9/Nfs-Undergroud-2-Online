@@ -5,7 +5,6 @@ Manages all connected users, their state, and associated data.
 
 import time
 import threading
-import hashlib
 import logging
 from typing import Optional, Dict, List
 
@@ -78,7 +77,7 @@ class User:
         self.mute_reason  = ""
         self.muted_at     = 0.0
 
-        # Stock LAN-style per-client filter/subscription state.
+        # Stock lobby-style per-client filter/subscription state.
         self.rooms_filter = {
             "USERS": 0,
             "USERSETS": 0,

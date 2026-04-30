@@ -18,8 +18,7 @@ DLL exports matched:
 import time
 import threading
 import logging
-import hashlib
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 
 log = logging.getLogger("matchmaking")
 

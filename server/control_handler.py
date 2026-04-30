@@ -9,10 +9,7 @@ import os
 import socket
 import struct
 import threading
-from typing import TYPE_CHECKING, Optional
-
-if TYPE_CHECKING:
-    from server import GameServer
+from typing import Optional
 
 log = logging.getLogger("control")
 
@@ -256,14 +253,6 @@ class ControlHandler:
         presence_lines = self._presence_lines_for_row({**row, "user": user, "attr": attr})
         return roster_lines, presence_lines
 
-    def _presence_lines_for_target(self, target: str, attr: str = "") -> Optional[list[str]]:
-        row = self.srv.control_social_presence_row(self._peer_user, target)
-        if row is None:
-            return None
-        if attr:
-            row = {**row, "attr": attr}
-        return self._presence_lines_for_row(row)
-
     @staticmethod
     def _should_send_presence_for_row(row: dict) -> bool:
         if row.get("online"):
@@ -299,10 +288,6 @@ class ControlHandler:
             sum(1 for row in rows if not row.get("online")),
         )
         return True
-
-    def _outgoing_request_attr(self) -> str:
-        attr = str(self.srv.cfg.get("CONTROL_SOCIAL_OUTGOING_REQUEST_ATTR", "P") or "P").strip().upper()
-        return attr[:1] or "P"
 
     @staticmethod
     def _social_target_name(value: str) -> str:
@@ -514,7 +499,7 @@ class ControlHandler:
                 target,
             )
             return self._send_message(verb, self._ack_lines(kv, status=True) + ["DELIVERED=0"])
-        sender_handler = self._lan_handler_for_social_name(self._peer_user)
+        sender_handler = self._lobby_handler_for_social_name(self._peer_user)
         game = None
         if sender_handler is not None and getattr(sender_handler.user, "game", 0):
             game = self.srv.games.get(int(getattr(sender_handler.user, "game", 0) or 0))
@@ -543,7 +528,7 @@ class ControlHandler:
                 ]
             )
         delivered = 0
-        lan_delivered = 0
+        lobby_delivered = 0
         if target and not self.srv.control_social_is_blocked(self._peer_user, target):
             row = self.srv.control_social_presence_row(target, self._peer_user)
             if row is not None:
@@ -551,27 +536,27 @@ class ControlHandler:
             delivered += self.srv.control_social_deliver(target, "PADD", ["LRSC=PC", f"USER={self._peer_user}"])
             delivered += self.srv.control_social_deliver(target, "INVT", invite_lines)
             if sender_handler is not None:
-                deliver_invite = getattr(sender_handler, "_lan_deliver_invite", None)
+                deliver_invite = getattr(sender_handler, "_lobby_deliver_invite", None)
                 if callable(deliver_invite):
                     try:
-                        lan_delivered = int(deliver_invite(target, invite_text) or 0)
+                        lobby_delivered = int(deliver_invite(target, invite_text) or 0)
                     except Exception:
-                        lan_delivered = 0
+                        lobby_delivered = 0
         log.info(
-            "CONTROL invite peer=%s:%d verb=%s from=%s target=%s delivered=%d lan=%d game=%d text=%s",
+            "CONTROL invite peer=%s:%d verb=%s from=%s target=%s delivered=%d lobby=%d game=%d text=%s",
             self.peer_ip,
             self.peer_port,
             verb,
             self._peer_user or "-",
             target or "-",
             delivered,
-            lan_delivered,
+            lobby_delivered,
             game_id,
             invite_text or "-",
         )
         return self._send_message(
             verb,
-            self._ack_lines(kv, status=True) + [f"DELIVERED={max(delivered, lan_delivered)}"],
+            self._ack_lines(kv, status=True) + [f"DELIVERED={max(delivered, lobby_delivered)}"],
         )
 
     def _handle_message(self, verb: str, kv: dict) -> bool:
@@ -623,7 +608,7 @@ class ControlHandler:
             self._ack_lines(kv, status=True) + [f"DELIVERED={delivered}"],
         )
 
-    def _lan_handler_for_social_name(self, name: str):
+    def _lobby_handler_for_social_name(self, name: str):
         key_fn = getattr(self.srv, "_social_key", None)
         wanted = key_fn(name) if callable(key_fn) else str(name or "").strip().lower()
         if not wanted:
@@ -638,11 +623,11 @@ class ControlHandler:
             ]
             if handler is not None:
                 try:
-                    candidates.append(handler._lan_display_name_for(user))
+                    candidates.append(handler._lobby_display_name_for(user))
                 except Exception:
                     pass
                 try:
-                    candidates.append(handler._lan_persona_for(user))
+                    candidates.append(handler._lobby_persona_for(user))
                 except Exception:
                     pass
             for candidate in candidates:
@@ -651,17 +636,17 @@ class ControlHandler:
                     return handler
         return None
 
-    def _deliver_lan_private_message(self, target: str, text: str) -> int:
-        target_handler = self._lan_handler_for_social_name(target)
+    def _deliver_lobby_private_message(self, target: str, text: str) -> int:
+        target_handler = self._lobby_handler_for_social_name(target)
         if target_handler is None or not bool(getattr(target_handler.user, "connected", False)):
             return 0
-        sender_handler = self._lan_handler_for_social_name(self._peer_user)
+        sender_handler = self._lobby_handler_for_social_name(self._peer_user)
         if sender_handler is not None and int(getattr(target_handler.user, "uid", 0) or 0) == int(getattr(sender_handler.user, "uid", 0) or 0):
             return 0
         try:
             target_burst = target_handler._make_20922_tab_message(
                 "+msg",
-                target_handler._lan_msg_fields(
+                target_handler._lobby_msg_fields(
                     text,
                     sender=self._peer_user,
                     flag="P",
@@ -679,7 +664,7 @@ class ControlHandler:
             try:
                 sender_burst = sender_handler._make_20922_tab_message(
                     "+msg",
-                    sender_handler._lan_msg_fields(
+                    sender_handler._lobby_msg_fields(
                         text,
                         sender=f"\"To {target}\"",
                         flag="PU",
@@ -748,22 +733,22 @@ class ControlHandler:
             )
             chat_lines = self._chat_delivery_lines(msg_type, body, text, secs)
             delivered = 0
-            lan_delivered = 0
+            lobby_delivered = 0
             if target and not self.srv.control_social_is_blocked(self._peer_user, target):
                 row = self.srv.control_social_presence_row(target, self._peer_user)
                 if row is not None:
                     delivered += self.srv.control_social_deliver(target, "PGET", self._presence_lines_for_row(row))
                 delivered += self.srv.control_social_deliver(target, "PADD", ["LRSC=PC", f"USER={self._peer_user}"])
                 delivered += self.srv.control_social_deliver(target, "RECV", chat_lines)
-                lan_delivered = self._deliver_lan_private_message(target, text)
+                lobby_delivered = self._deliver_lobby_private_message(target, text)
             log.info(
-                "CONTROL send-chat peer=%s:%d from=%s target=%s delivered=%d lan=%d type=%s body=%s",
+                "CONTROL send-chat peer=%s:%d from=%s target=%s delivered=%d lobby=%d type=%s body=%s",
                 self.peer_ip,
                 self.peer_port,
                 self._peer_user or "-",
                 target or "-",
                 delivered,
-                lan_delivered,
+                lobby_delivered,
                 msg_type or "C",
                 body or "-",
             )
@@ -906,13 +891,13 @@ class ControlHandler:
         path = target.split("?", 1)[0].strip() or "/"
         if path.endswith("/tos") or path == "/tos" or "tos" in path.lower():
             return "text/plain; charset=iso-8859-1", self._read_content_file(
-                "LAN_TOS_FILE",
+                "LOBBY_TOS_FILE",
                 "tos",
                 b'%{ CMD=news TITLE="Terms of Service" BTN1="Agree" BTN1-GOTO="$quit" BTN2="Disagree" BTN2-GOTO="$exit=-1" %}\r\nTerms of Service\r\n',
             )
         if path.endswith("/news") or path == "/news" or "news" in path.lower():
             return "text/plain; charset=utf-8", self._read_content_file(
-                "LAN_NEWS_FILE",
+                "LOBBY_NEWS_FILE",
                 "news",
                 b'%{ CMD=news TITLE="News" BTN1="Close" BTN1-GOTO="$quit"%}\r\nWelcome back online.\r\n',
             )

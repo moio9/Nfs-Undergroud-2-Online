@@ -5,9 +5,7 @@ Matches the wire format found in server.dll strings.
 
 import re
 import time
-import struct
 import socket
-from typing import Any
 
 
 def format_addr(ip: str) -> str:

@@ -8,12 +8,11 @@ Matches DLL: 'BATCH: %d reports processed this cycle'
 import time
 import json
 import queue
-import hashlib
 import threading
 import logging
 import urllib.request
 import urllib.error
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 log = logging.getLogger("batch")
 
