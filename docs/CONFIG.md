@@ -26,7 +26,7 @@ Default ports:
 
 - `bootstrap_port = 20921`
 - `lobby_port = 20922`
-- `race_port = 2000`
+- `race_port = 5000`
 - `control_port = 20923`
 - `control_alias_port = 13505`
 - `lan_port = 20922`
@@ -75,7 +75,7 @@ SERVER_CONN_RATE_WINDOW=10
 SERVER_CONN_RATE_BLOCK=5
 BOOTSTRAP_ENDPOINT=127.0.0.1:20921
 LOBBY_ENDPOINT=127.0.0.1:20922
-RACE_ENDPOINT=127.0.0.1:2000
+RACE_ENDPOINT=127.0.0.1:5000
 UDP_GAME_PORT=3658
 ```
 
@@ -92,7 +92,7 @@ Listen endpoints are local sockets opened by the server:
 ```ini
 BOOTSTRAP_LISTEN=0.0.0.0:20921
 LOBBY_LISTEN=0.0.0.0:20922
-RACE_LISTEN=0.0.0.0:2000
+RACE_LISTEN=0.0.0.0:5000
 ```
 
 For remote hosting, usually change only the public endpoints to your public IP/host.
@@ -106,12 +106,46 @@ LAN lobby search can either follow stock `CUSTFLAGS/CUSTMASK` filtering or list
 all public games regardless of those filters:
 
 ```ini
-LAN_GSEA_CUST_FILTERS=1
+LOBBY_GSEA_CUST_FILTERS=1
 ```
 
 Use `1` for stock behavior: `gsea` applies race mode, car/performance class, and
 related `CUSTFLAGS` filters. Use `0` to ignore `CUSTFLAGS/CUSTMASK` during
 search; private/matched filtering through `SYSFLAGS` still applies.
+
+## Logging
+
+The release config keeps the console quiet and writes normal logs to a file:
+
+```ini
+DEBUG_MODE=0
+LOG_LEVEL=INFO
+LOG_CONSOLE_LEVEL=WARNING
+LOG_FILE=logs/server.log
+LOG_FILE_LEVEL=INFO
+LOBBY_FRAME_TRACE=0
+UDP_RELAY_VERBOSE=0
+UDP_DEBUG=off
+```
+
+`DEBUG_MODE` is general server debug; it writes DEBUG logs to `LOG_FILE` while
+the console still follows `LOG_CONSOLE_LEVEL`. `UDP_RELAY_VERBOSE`/`UDP_DEBUG`
+are only for race relay diagnostics. `LOBBY_FRAME_TRACE=1` is very noisy and
+should only be enabled while debugging lobby packet flow.
+
+To disable all logging, use:
+
+```ini
+LOG_CONSOLE_LEVEL=OFF
+LOG_FILE=
+```
+
+At runtime, the admin shell supports:
+
+```text
+debug status|on|off
+udpdebug status|on|off
+```
 
 ## Authentication
 

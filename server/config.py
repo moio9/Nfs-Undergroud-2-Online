@@ -12,6 +12,13 @@ DEFAULTS = {
     "INCLUDE":                "",
     "CONFIG_INCLUDE":         "",
 
+    # Logging
+    "DEBUG_MODE":             0,
+    "LOG_LEVEL":              "INFO",
+    "LOG_CONSOLE_LEVEL":      "WARNING",
+    "LOG_FILE":               "",
+    "LOG_FILE_LEVEL":         "INFO",
+
     # Network - simplified online-server schema.
     # These keys are translated to the explicit listen/public keys after load.
     "PUBLIC_HOST":            "",
@@ -75,7 +82,7 @@ DEFAULTS = {
     "LOBBY_TERM_SST_DELAY":   2.7,
     "LOBBY_JOIN_MGM_DELAY":   0.015,
     "LOBBY_JOIN_NOTIFY_MGM":  0,
-    "LOBBY_FRAME_TRACE":      1,
+    "LOBBY_FRAME_TRACE":      0,
     "LOBBY_JOIN_COUNTDOWN_ENABLE": 0,
     "LOBBY_JOIN_COUNTDOWN_DELAY": 10.7,
     "LOBBY_READY_NOTIFY_PEERS": 1,

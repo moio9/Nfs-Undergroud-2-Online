@@ -41,11 +41,19 @@ import persona_policy
 # Logging setup                                                        #
 # ------------------------------------------------------------------ #
 
+_LOG_FORMAT = "%(asctime)s [%(name)-14s] %(levelname)s: %(message)s"
+_LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+_LOG_OFF_LEVEL = logging.CRITICAL + 10
+
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)-14s] %(levelname)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+    level=logging.WARNING,
+    format=_LOG_FORMAT,
+    datefmt=_LOG_DATEFMT,
 )
+for _handler in logging.getLogger().handlers:
+    setattr(_handler, "_u2online_managed", True)
+    setattr(_handler, "_u2online_kind", "console")
+
 log = logging.getLogger("server")
 
 
@@ -65,6 +73,105 @@ class UDPRelayVerboseFilter(logging.Filter):
 
 _udp_relay_verbose_filter = UDPRelayVerboseFilter()
 log.addFilter(_udp_relay_verbose_filter)
+
+
+def _cfg_bool(value: object) -> bool:
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in ("1", "true", "yes", "on"):
+            return True
+        if text in ("0", "false", "no", "off", ""):
+            return False
+    try:
+        return int(value or 0) != 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _log_level(value: object, default: int = logging.INFO) -> int:
+    if isinstance(value, int):
+        return value
+    text = str(value or "").strip().upper()
+    if not text:
+        return default
+    if text.isdigit():
+        return int(text)
+    levels = {
+        "CRITICAL": logging.CRITICAL,
+        "ERROR": logging.ERROR,
+        "WARN": logging.WARNING,
+        "WARNING": logging.WARNING,
+        "INFO": logging.INFO,
+        "DEBUG": logging.DEBUG,
+        "NOTSET": logging.NOTSET,
+        "OFF": _LOG_OFF_LEVEL,
+        "NONE": _LOG_OFF_LEVEL,
+        "DISABLED": _LOG_OFF_LEVEL,
+    }
+    return levels.get(text, default)
+
+
+def _log_file_path(config_path: str, raw_path: object) -> str:
+    path = str(raw_path or "").strip()
+    if not path:
+        return ""
+    if os.path.isabs(path):
+        return path
+    return os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(config_path)), path))
+
+
+def _mark_log_handler(handler: logging.Handler, kind: str) -> logging.Handler:
+    setattr(handler, "_u2online_managed", True)
+    setattr(handler, "_u2online_kind", kind)
+    return handler
+
+
+def configure_logging_from_config(cfg: Config, config_path: str) -> None:
+    debug_mode = _cfg_bool(cfg.get("DEBUG_MODE", 0))
+    default_level = logging.DEBUG if debug_mode else _log_level(cfg.get("LOG_LEVEL", "INFO"), logging.INFO)
+    console_level = _log_level(cfg.get("LOG_CONSOLE_LEVEL", ""), default_level)
+    file_path = _log_file_path(config_path, cfg.get("LOG_FILE", ""))
+    file_level = _log_level(cfg.get("LOG_FILE_LEVEL", ""), default_level)
+    if debug_mode and file_path and file_level > logging.DEBUG:
+        file_level = logging.DEBUG
+
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        if getattr(handler, "_u2online_managed", False):
+            root.removeHandler(handler)
+            try:
+                handler.close()
+            except Exception:
+                pass
+
+    formatter = logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT)
+    handler_levels = []
+
+    if console_level < _LOG_OFF_LEVEL:
+        console_handler = _mark_log_handler(logging.StreamHandler(), "console")
+        console_handler.setLevel(console_level)
+        console_handler.setFormatter(formatter)
+        root.addHandler(console_handler)
+        handler_levels.append(console_level)
+
+    if file_path and file_level < _LOG_OFF_LEVEL:
+        try:
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            file_handler = _mark_log_handler(logging.FileHandler(file_path, encoding="utf-8"), "file")
+            file_handler.setLevel(file_level)
+            file_handler.setFormatter(formatter)
+            root.addHandler(file_handler)
+            handler_levels.append(file_level)
+        except OSError as exc:
+            log.warning("Failed to open log file '%s': %s", file_path, exc)
+
+    if not handler_levels:
+        root.addHandler(_mark_log_handler(logging.NullHandler(), "null"))
+        root.setLevel(_LOG_OFF_LEVEL)
+    else:
+        root.setLevel(min(handler_levels + [default_level]))
+    for logger_name in ("server", "client", "rooms", "users", "ranking", "master", "config", "control", "batch", "matchmaking"):
+        logging.getLogger(logger_name).setLevel(logging.NOTSET)
 
 Addr = Tuple[str, int]
 
@@ -190,6 +297,7 @@ class GameServer:
         self._config_path = os.path.abspath(config_path)
         self.cfg = Config()
         self.cfg.load(config_path)
+        configure_logging_from_config(self.cfg, self._config_path)
 
         # Subsystems
         self.users      = UserManager(self.cfg)
@@ -2203,14 +2311,34 @@ class GameServer:
         return "\n".join(lines) if lines else "no bans"
 
     def _admin_debug_status(self) -> str:
-        level = logging.getLogger().getEffectiveLevel()
-        name = logging.getLevelName(level)
-        return f"debug level={name} udpdebug={'on' if self._udp_relay_verbose else 'off'}"
+        root = logging.getLogger()
+        level = logging.getLevelName(root.getEffectiveLevel())
+        handlers = []
+        for handler in root.handlers:
+            if not getattr(handler, "_u2online_managed", False):
+                continue
+            kind = str(getattr(handler, "_u2online_kind", "handler"))
+            handler_level = logging.getLevelName(handler.level)
+            if kind == "file":
+                filename = getattr(handler, "baseFilename", "")
+                handlers.append(f"file={handler_level}:{filename}")
+            else:
+                handlers.append(f"{kind}={handler_level}")
+        handler_text = " ".join(handlers) if handlers else "handlers=external"
+        return f"debug level={level} {handler_text} udpdebug={'on' if self._udp_relay_verbose else 'off'}"
 
     def _admin_set_debug(self, enabled: bool) -> str:
-        level = logging.DEBUG if enabled else logging.INFO
-        logging.getLogger().setLevel(level)
-        for logger_name in ("server", "client", "rooms", "users", "ranking", "master", "config"):
+        if not enabled:
+            configure_logging_from_config(self.cfg, self._config_path)
+            return self._admin_debug_status()
+
+        level = logging.DEBUG
+        root = logging.getLogger()
+        root.setLevel(level)
+        for handler in root.handlers:
+            if getattr(handler, "_u2online_managed", False):
+                handler.setLevel(level)
+        for logger_name in ("server", "client", "rooms", "users", "ranking", "master", "config", "control", "batch", "matchmaking"):
             logging.getLogger(logger_name).setLevel(level)
         return self._admin_debug_status()
 
@@ -2448,6 +2576,7 @@ class GameServer:
         self.cfg._data = dict(DEFAULTS)
         if not self.cfg.load(self._config_path):
             return f"failed to reload config from {self._config_path}"
+        configure_logging_from_config(self.cfg, self._config_path)
 
         # Apply safe runtime tunables only. Listener host/port changes still need restart.
         self.users.max_users = int(self.cfg.get("SERVER_MAX_PLAYERS", self.cfg.get("USERS", self.users.max_users)) or self.users.max_users)

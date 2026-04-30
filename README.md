@@ -22,11 +22,14 @@ The default config listens on:
 - `20922/tcp` - lobby TCP, used by both Online and LAN injection
 - `20923/tcp` - control
 - `13505/tcp` - control alias
-- `2000/udp` - race relay
+- `5000/udp` - race relay
 
 Game clients also need local `3658/udp` free for race peer traffic. This is not
 the server relay port, but it matters during same-machine or same-LAN testing,
 especially after a crashed/stale game instance.
+
+By default, the server prints only warnings/errors in the terminal and writes
+normal logs to `server/logs/server.log`.
 
 ## Install The Client
 
