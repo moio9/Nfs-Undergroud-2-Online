@@ -1,24 +1,123 @@
-1.-Invalid nume/account
-2.-already logged on server
-3.-the ea account is locked and cannot be used, please contact ea customer support.
-4.-the specified password is invalid
-5.-the ea account has not been authentiticated with a cd key. You must lock your cd key to an ea account before you can play onlin.A cd key can only be locked to one EA account, and the process cannot be undone.Do you want to lock you cd key to this EA account?(potiune yes/no, deci nu trebuie diconect ca nu e eroare neaparat)
-6.-doar baga tos fortat chiar daca nu creez cont
-7.-The ea server curently experience tehnical dificulties. Please try again later. If problem persists, please contact ea customer support.\
-8.-This account has been banned.
-9.-the lobby server login failed. The server may be down or there may be network problems preventing a connection this time. Check your network settings and try again later.
-10.lafel ca punctul 9.?
-11.lafel ca punctul 10.?
-12.lafel ca punctul 11.?
-13.lafel ca punctul 12.?
+NFS Underground 2 Online - stock client error dialogs
+=====================================================
+
+This file documents the stock dialogs seen when the server sends forced
+20922 auth/persona reject frames. Use the code in the left column with the
+admin commands documented in docs/CONFIG.md:
+
+  authcode <code> <account|*>
+  personacode <code> <persona|*> [uses]
 
 
-PERSONA
-1.-There was a problem selecting this persona, You will be returned to EA login screen.
-2.lafel ca punctul 1.?
-3.lafel ca punctul 2.?
+AUTH / LOGIN
+------------
+
+The server sends these as auth<code> frames.
+
+1. imst - invalid/missing account
+   Dialog: "Invalid name/account."
+   Server reasons: unknown_account, missing_identifier, invalid_auth.
+
+2. logn - account already logged in
+   Dialog: "Already logged on server."
+   Server reasons: account_in_use, already_logged_in, already_online.
+
+3. lock - locked/disabled account
+   Dialog: "The EA account is locked and cannot be used. Please contact EA
+   Customer Support."
+   Server reasons: account_locked, account_disabled, rate_limited.
+
+4. pass - invalid password
+   Dialog: "The specified password is invalid."
+   Server reasons: bad_password, missing_password, password_error.
+
+5. ikey - CD key/account key problem
+   Dialog: "The EA account has not been authenticated with a CD key. You must
+   lock your CD key to an EA account before you can play online. A CD key can
+   only be locked to one EA account, and the process cannot be undone. Do you
+   want to lock your CD key to this EA account?"
+   Notes: this is a yes/no prompt in the client, not a hard disconnect dialog
+   by itself.
+   Server reasons: invalid_key, bad_key, invalid_cdkey, invalid_cd_key.
+
+6. tosa - Terms of Service required
+   Dialog: forces the Terms of Service flow even if account creation is not
+   being used.
+   Server reasons: tos_not_accepted, terms_not_accepted.
+
+7. dber - backend/database/server-side auth failure
+   Dialog: "The EA server is currently experiencing technical difficulties.
+   Please try again later. If the problem persists, please contact EA Customer
+   Support."
+   Server reasons: database_error, backend_error, save_failed, no_accounts,
+   server_full.
+
+8. blak - banned/blocked account
+   Dialog: "This account has been banned."
+   Server reasons: admin_ban, banned, blacklisted, blacklist, blocked.
+
+9. shar - share/privacy agreement required
+   Observed dialog: same generic lobby-server login failure as below on this
+   client build.
+   Server reasons: share_not_accepted, share_required.
+
+10. miss - missing required login fields
+    Observed dialog: same generic lobby-server login failure as below.
+    Server reasons: missing_fields, missing_required_fields.
+
+11. filt - account/name text filter failure
+    Observed dialog: same generic lobby-server login failure as below.
+    Server reasons: filtered, filter_failed, profane.
+
+12. time - auth backend timeout
+    Observed dialog: same generic lobby-server login failure as below.
+    Server reasons: auth_timeout, timeout, backend_timeout.
+
+13. over - invalid auth backend state
+    Observed dialog: same generic lobby-server login failure as below.
+    Server reasons: invalid_state, backend_over.
+
+Generic login failure text for codes 9-13:
+"The lobby server login failed. The server may be down or there may be network
+problems preventing a connection this time. Check your network settings and try
+again later."
+
+
+PERSONA SELECT
+--------------
+
+The server sends these as pers<code> frames. Normal login usually uses the
+select-persona path, so use these codes when testing an existing persona.
+
+1. persinvp - invalid persona / persona not allowed for account
+   Dialog: "There was a problem selecting this persona. You will be returned
+   to the EA login screen."
+   Server reasons: invp, invalid persona, account/persona mismatch.
+
+2. persmaut - persona selected before auth is complete
+   Observed dialog: same as persinvp.
+   Server reasons: maut, missing auth.
+
+3. perspset - persona policy/blacklist rejection
+   Observed dialog: same as persinvp.
+   Server reasons: pset, policy set/blacklist hit.
+
 
 CREATE PERSONA
-1.-This persona is already taken. Pleas try a diffrent name.
-2.-There was an error creating this persona.
-3.lafel ca punctul 2.?
+--------------
+
+The server sends these as cper<code> frames. These only apply when the client is
+creating a new persona and sends cper.
+
+1. cperdupl - duplicate persona
+   Dialog: "This persona is already taken. Please try a different name."
+   Server reasons: dupl, active duplicate persona.
+
+2. cperinvp - invalid persona
+   Dialog: "There was an error creating this persona."
+   Server reasons: invp, invalid characters, empty name, too long, blacklist
+   when configured to use invp.
+
+3. cpernspc - no persona slot available
+   Observed dialog: same as cperinvp.
+   Server reasons: nspc, persona slot limit reached.

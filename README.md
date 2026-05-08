@@ -31,6 +31,10 @@ especially after a crashed/stale game instance.
 By default, the server prints only warnings/errors in the terminal and writes
 normal logs to `server/logs/server.log`.
 
+## Public Server
+
+- Server IP: `161.35.110.36`
+
 ## Install The Client
 
 1. Copy `client/online/dist/online.asi` into the game's `scripts` folder.
@@ -58,3 +62,27 @@ Requires `i686-w64-mingw32-g++`.
 ## Configuration
 
 See `docs/CONFIG.md`.
+
+## Release Prep
+
+See `docs/RELEASE.md` for the launch checklist, public-host settings, required
+ports, and packaging notes.
+
+## Support
+
+Please help to keep this project alive.
+
+If I cannot raise at least 4 EUR per month, I will not be able to keep my server
+online for that month.
+
+- Monero: `46Mk8t9uLY7jnBXnyHMyVARvwk1Y7jcGEQwKLN8GtGGBioncjKLgkEa33jEN2ibgkQjoFZWVwXXwsM3vzAFz4RzV7psLow6`
+- Bitcoin: `bc1qgxp74eza7jaf4fdw5cl3sanqvnh0cjmz0w9scz`
+- Ethereum: `0xa024a505Ec24c7eA163985eC89D56e614B9AdAae`
+- PayPal: https://paypal.me/moioyoyo
+
+## Contact
+
+- Odysee: https://odysee.com/@moio.yoyo:3
+- Steam: https://steamcommunity.com/profiles/76561198169326632
+- Discord: `Puya#0957`
+- itch: https://moio9.itch.io/
