@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test-server:
+    name: Server integration tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run integration tests
+        run: PYTHONPATH=server python tools/test_client.py
+
+  build-client:
+    name: Build client plugin
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install MinGW cross compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends g++-mingw-w64-i686
+
+      - name: Build online.asi
+        run: ./client/online/build.sh
+
+      - name: Upload client artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nfsu2-online-client
+          path: |
+            client/online/dist/online.asi
+            client/online/configs/ONLINE.cfg
+          if-no-files-found: error
