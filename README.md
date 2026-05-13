@@ -1,6 +1,6 @@
-# NFSU2 Online LAN Release
+# NFSU2 Online/LAN Server Release
 
-Standalone release workspace for the `online` client and the Python server.
+Standalone release for the `online` client and the Python Need for Speed Underground 2 server.
 
 ## Layout
 
