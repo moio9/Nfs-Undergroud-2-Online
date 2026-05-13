@@ -3024,17 +3024,14 @@ class ClientHandler:
     def _lobby_auth_frame(self) -> bytes:
         name = (self._probe_display_name or self.user.name or f"Player{self.user.uid}").strip()
         persona = (self._probe_persona or self.user.pers or name).strip()
-        # The captured auth frame has only 122 bytes before the MD5 trailer.
-        # Keep the auto-push experiment on the known-fitting capture identity.
-        if self._lobby_auth_autopush_enabled():
-            name = "Moio9"
-            persona = "Moio"
+        # Keep auth identity derived from the active probe/user state.
+        # Do not force personal test identities when auto-push is enabled.
         self._probe_display_name = name
         self.user.name = name
         self._probe_persona = persona
         tos_value = self._lobby_tos_value("AUTH_TOS", 3)
-        preferred_mail = (self._auth_mail or "moio.yoyo@yahoo.com").strip()
-        fallback_mail = preferred_mail if self._auth_mail else "yo@yahoo.com"
+        preferred_mail = str(self._auth_mail or "").strip()
+        fallback_mail = preferred_mail or f"u{int(self.user.uid)}@e.local"
 
         def build(mail: str, pers: str, display: str) -> bytes:
             return (
@@ -3042,7 +3039,7 @@ class ClientHandler:
                     [
                         f"MAIL={mail}",
                         "LAST=2005.12.8 15:51:38",
-                        "BORN=20030520",
+                        "BORN=19700101",
                         f"PERSONAS={self._lobby_auth_personas_value(pers)}",
                         f"TOS={tos_value}",
                         f"NAME={display}",
