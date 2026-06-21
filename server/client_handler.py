@@ -4809,11 +4809,13 @@ class ClientHandler:
                 self._handle_bootstrap_frame(cmd, payload)
                 consumed += total
                 continue
-            if cmd in ("addr", "skey", "news", "~png", "sele", "auth", "acct", "pers", "cper", "user", "snap", "userbadc", "auxi", "gsea", "gcre", "gjoi", "glea", "gdel", "gset", "gsta", "onln", "mesg", "rept", "KICK", "*ath", "*pat", "PERS", "AUXI", "GCRE", "GJOI", "GSET", "TERM", "*con", "@cnt", "@alv"):
+            if cmd in ("addr", "skey", "news", "~png", "sele", "auth", "acct", "pers", "cper", "dper", "user", "snap", "userbadc", "auxi", "gsea", "gcre", "gjoi", "glea", "gdel", "gset", "gsta", "onln", "mesg", "rept", "KICK", "*ath", "*pat", "PERS", "AUXI", "GCRE", "GJOI", "GSET", "TERM", "*con", "@cnt", "@alv"):
                 self._handle_plain_prelogin_frame(cmd, payload, reserved_be32=reserved_be32)
                 consumed += total
                 continue
-            break
+            log.info("[uid=%d] LAN bootstrap unhandled cmd=%r len=%d hex=%s", self.user.uid, cmd, len(payload), payload[:32].hex())
+            consumed += total
+            continue
         return consumed
 
     def _handle_plain_prelogin_frame(self, cmd: str, payload: bytes, reserved_be32: int = 0):
@@ -5055,6 +5057,20 @@ class ClientHandler:
             display_name = self._probe_display_name or self.user.name or requested
             if not self._lan_claim_persona_or_reject(requested, self._send_bootstrap_bytes, cmd):
                 return
+            if cmd == "cper" or requested.lower() not in {p.lower() for p in self._auth_personas}:
+                add_persona = getattr(self.srv, "add_lan_account_persona", None)
+                if callable(add_persona):
+                    identifier = self._auth_identifier or self._auth_mail or self._probe_display_name or self.user.name
+                    add_ok = add_persona(identifier, requested)
+                    log.info(
+                        "[uid=%d] cper persist identifier=%r persona=%r ok=%s",
+                        self.user.uid,
+                        identifier,
+                        requested,
+                        add_ok,
+                    )
+                    if add_ok and requested.lower() not in {p.lower() for p in self._auth_personas}:
+                        self._auth_personas.append(requested)
             self._probe_persona = requested
             self.user.pers = requested
             self.srv.remember_control_profile(
@@ -5071,6 +5087,33 @@ class ClientHandler:
                 "cper" if cmd == "cper" else "pers",
                 len(frame),
                 requested,
+            )
+            return
+
+        if cmd == "dper":
+            requested = kv.get("PERS", "").strip()
+            remove_persona = getattr(self.srv, "remove_lan_account_persona", None)
+            ok = False
+            if callable(remove_persona) and requested:
+                identifier = self._auth_identifier or self._auth_mail or self._probe_display_name or self.user.name
+                ok = remove_persona(identifier, requested)
+                if ok:
+                    self._auth_personas = [p for p in self._auth_personas if p.lower() != requested.lower()]
+                    if self.user.pers and self.user.pers.lower() == requested.lower() and self._auth_personas:
+                        fallback = self._auth_personas[0]
+                        self._probe_persona = fallback
+                        self.user.pers = fallback
+            frame = self._make_20922_signed_binary_message(
+                "dper",
+                f"PERS={requested}\nRESULT={'0' if ok else '1'}\n".encode("utf-8") + b"\x00",
+                116,
+            )
+            self._send_bootstrap_bytes(frame)
+            log.info(
+                "[uid=%d] LAN bootstrap plaintext cmd=dper persona=%r ok=%s",
+                self.user.uid,
+                requested,
+                ok,
             )
             return
 

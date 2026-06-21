@@ -903,6 +903,31 @@ class GameServer:
             return ok
         return True
 
+    def remove_lan_account_persona(self, identifier: str, persona: str) -> bool:
+        persona = str(persona or "").strip()
+        identifier = str(identifier or "").strip()
+        if not persona:
+            return False
+        accounts = self._load_lan_auth_accounts()
+        if not accounts:
+            return False
+        selected = None
+        if len(accounts) == 1:
+            selected = accounts[0]
+        if selected is None:
+            return False
+        personas = self._lan_auth_list(selected.get("personas"))
+        if persona.lower() not in {p.lower() for p in personas}:
+            return False
+        if len(personas) <= 1:
+            return False
+        personas = [p for p in personas if p.lower() != persona.lower()]
+        selected["personas"] = personas
+        ok = self._save_lan_auth_accounts(accounts)
+        if ok:
+            log.info("LAN auth persona removed account=%s persona=%s", identifier or "-", persona)
+        return ok
+
     def _lan_auth_enroll_account(self, accounts: List[dict], kv: dict, identifier: str, password: str) -> Optional[dict]:
         account = self._lan_auth_build_account(kv, identifier, password)
         if not self._save_lan_auth_accounts([*accounts, account]):
