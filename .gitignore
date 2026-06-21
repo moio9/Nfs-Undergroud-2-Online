@@ -11,3 +11,4 @@ __pycache__/
 ONLINE_LITE.LOG
 ONLINE.LOG
 ONLINE_REWRITE.LOG
+server/data/

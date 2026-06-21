@@ -35,25 +35,16 @@ from master       import MasterServer, SlaveClient
 from client_handler import ClientHandler
 from ea_messenger import EAMessengerServer
 from protocol import encode_message
-import persona_policy
 
 # ------------------------------------------------------------------ #
 # Logging setup                                                        #
 # ------------------------------------------------------------------ #
 
-_LOG_FORMAT = "%(asctime)s [%(name)-14s] %(levelname)s: %(message)s"
-_LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
-_LOG_OFF_LEVEL = logging.CRITICAL + 10
-
 logging.basicConfig(
-    level=logging.WARNING,
-    format=_LOG_FORMAT,
-    datefmt=_LOG_DATEFMT,
+    level=logging.INFO,
+    format="%(asctime)s [%(name)-14s] %(levelname)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
-for _handler in logging.getLogger().handlers:
-    setattr(_handler, "_u2online_managed", True)
-    setattr(_handler, "_u2online_kind", "console")
-
 log = logging.getLogger("server")
 
 
@@ -73,105 +64,6 @@ class UDPRelayVerboseFilter(logging.Filter):
 
 _udp_relay_verbose_filter = UDPRelayVerboseFilter()
 log.addFilter(_udp_relay_verbose_filter)
-
-
-def _cfg_bool(value: object) -> bool:
-    if isinstance(value, str):
-        text = value.strip().lower()
-        if text in ("1", "true", "yes", "on"):
-            return True
-        if text in ("0", "false", "no", "off", ""):
-            return False
-    try:
-        return int(value or 0) != 0
-    except (TypeError, ValueError):
-        return False
-
-
-def _log_level(value: object, default: int = logging.INFO) -> int:
-    if isinstance(value, int):
-        return value
-    text = str(value or "").strip().upper()
-    if not text:
-        return default
-    if text.isdigit():
-        return int(text)
-    levels = {
-        "CRITICAL": logging.CRITICAL,
-        "ERROR": logging.ERROR,
-        "WARN": logging.WARNING,
-        "WARNING": logging.WARNING,
-        "INFO": logging.INFO,
-        "DEBUG": logging.DEBUG,
-        "NOTSET": logging.NOTSET,
-        "OFF": _LOG_OFF_LEVEL,
-        "NONE": _LOG_OFF_LEVEL,
-        "DISABLED": _LOG_OFF_LEVEL,
-    }
-    return levels.get(text, default)
-
-
-def _log_file_path(config_path: str, raw_path: object) -> str:
-    path = str(raw_path or "").strip()
-    if not path:
-        return ""
-    if os.path.isabs(path):
-        return path
-    return os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(config_path)), path))
-
-
-def _mark_log_handler(handler: logging.Handler, kind: str) -> logging.Handler:
-    setattr(handler, "_u2online_managed", True)
-    setattr(handler, "_u2online_kind", kind)
-    return handler
-
-
-def configure_logging_from_config(cfg: Config, config_path: str) -> None:
-    debug_mode = _cfg_bool(cfg.get("DEBUG_MODE", 0))
-    default_level = logging.DEBUG if debug_mode else _log_level(cfg.get("LOG_LEVEL", "INFO"), logging.INFO)
-    console_level = _log_level(cfg.get("LOG_CONSOLE_LEVEL", ""), default_level)
-    file_path = _log_file_path(config_path, cfg.get("LOG_FILE", ""))
-    file_level = _log_level(cfg.get("LOG_FILE_LEVEL", ""), default_level)
-    if debug_mode and file_path and file_level > logging.DEBUG:
-        file_level = logging.DEBUG
-
-    root = logging.getLogger()
-    for handler in list(root.handlers):
-        if getattr(handler, "_u2online_managed", False):
-            root.removeHandler(handler)
-            try:
-                handler.close()
-            except Exception:
-                pass
-
-    formatter = logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT)
-    handler_levels = []
-
-    if console_level < _LOG_OFF_LEVEL:
-        console_handler = _mark_log_handler(logging.StreamHandler(), "console")
-        console_handler.setLevel(console_level)
-        console_handler.setFormatter(formatter)
-        root.addHandler(console_handler)
-        handler_levels.append(console_level)
-
-    if file_path and file_level < _LOG_OFF_LEVEL:
-        try:
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-            file_handler = _mark_log_handler(logging.FileHandler(file_path, encoding="utf-8"), "file")
-            file_handler.setLevel(file_level)
-            file_handler.setFormatter(formatter)
-            root.addHandler(file_handler)
-            handler_levels.append(file_level)
-        except OSError as exc:
-            log.warning("Failed to open log file '%s': %s", file_path, exc)
-
-    if not handler_levels:
-        root.addHandler(_mark_log_handler(logging.NullHandler(), "null"))
-        root.setLevel(_LOG_OFF_LEVEL)
-    else:
-        root.setLevel(min(handler_levels + [default_level]))
-    for logger_name in ("server", "client", "rooms", "users", "ranking", "master", "config", "control", "batch", "matchmaking"):
-        logging.getLogger(logger_name).setLevel(logging.NOTSET)
 
 Addr = Tuple[str, int]
 
@@ -297,7 +189,6 @@ class GameServer:
         self._config_path = os.path.abspath(config_path)
         self.cfg = Config()
         self.cfg.load(config_path)
-        configure_logging_from_config(self.cfg, self._config_path)
 
         # Subsystems
         self.users      = UserManager(self.cfg)
@@ -343,35 +234,25 @@ class GameServer:
             "pers": {},
             "name": {},
         }
-        self._auth_accounts_path = ""
-        self._auth_accounts_mtime = -1.0
-        self._auth_accounts_cache: List[dict] = []
-        self._auth_accounts_lock = threading.RLock()
-        self._auth_failures: Dict[str, List[float]] = {}
-        self._auth_forced_rejects: List[dict] = []
-        self._persona_forced_rejects: List[dict] = []
-        self._auth_lock = threading.Lock()
-        self._connection_rate_lock = threading.Lock()
-        self._connection_rate_attempts: Dict[str, List[float]] = {}
-        self._connection_rate_blocked_until: Dict[str, float] = {}
-        self._lobby_connection_lock = threading.Lock()
-        self._lobby_active_connections = 0
-        self._lobby_dir_challenges: Dict[str, Tuple[str, str, float]] = {}
-        self._lobby_dir_challenges_lock = threading.Lock()
+        self._lan_auth_accounts_path = ""
+        self._lan_auth_accounts_mtime = -1.0
+        self._lan_auth_accounts_cache: List[dict] = []
+        self._lan_auth_accounts_lock = threading.RLock()
+        self._lan_auth_failures: Dict[str, List[float]] = {}
+        self._lan_auth_lock = threading.Lock()
+        self._lan_dir_challenges: Dict[str, Tuple[str, str, float]] = {}
+        self._lan_dir_challenges_lock = threading.Lock()
         self._udp_relay_uid_addr_by_room: Dict[int, Dict[int, Addr]] = {}
         self._udp_relay_clients: Dict[Addr, UDPRelayClientState] = {}
         self._udp_relay_rooms: Dict[int, Set[Addr]] = {}
         self._udp_relay_pending_room_packets: Dict[int, List[Tuple[Addr, bytes]]] = {}
         self._udp_relay_pending_room_raw_packets: Dict[int, List[Tuple[Addr, bytes]]] = {}
-        self._udp_relay_pending_room_seen: Dict[int, float] = {}
-        self._udp_relay_pending_room_raw_seen: Dict[int, float] = {}
         self._udp_relay_raw_started_rooms: Set[int] = set()
         self._udp_relay_host_bootstrap_sent: Set[Tuple[int, Addr, Addr]] = set()
         self._udp_relay_missing_65_sent: Set[Tuple[int, Addr, Addr]] = set()
         self._udp_relay_host_continuation_sent: Set[Tuple[int, Addr, Addr]] = set()
         self._udp_relay_alias_send_logged: Set[Tuple[Addr, Addr]] = set()
         self._udp_relay_recv_log_count = 0
-        self._udp_relay_limit_log_at = 0.0
         self._last_master_stat_payload = ""
         self._last_master_stat_log_time = 0.0
         self._master_stat_dirty = True
@@ -438,192 +319,88 @@ class GameServer:
                 continue
         return False
 
-    def _cfg_int(self, key: str, default: int, *, min_value: Optional[int] = None, max_value: Optional[int] = None) -> int:
-        try:
-            value = int(self.cfg.get(key, default) or default)
-        except (TypeError, ValueError):
-            value = int(default)
-        if min_value is not None:
-            value = max(int(min_value), value)
-        if max_value is not None:
-            value = min(int(max_value), value)
-        return value
-
-    def _cfg_float(self, key: str, default: float, *, min_value: Optional[float] = None, max_value: Optional[float] = None) -> float:
-        try:
-            value = float(self.cfg.get(key, default) or default)
-        except (TypeError, ValueError):
-            value = float(default)
-        if min_value is not None:
-            value = max(float(min_value), value)
-        if max_value is not None:
-            value = min(float(max_value), value)
-        return value
-
-    def _connection_rate_settings(self) -> Tuple[int, float, float]:
-        try:
-            limit = int(self.cfg.get("SERVER_CONN_RATE_LIMIT", 20) or 0)
-        except (TypeError, ValueError):
-            limit = 20
-        try:
-            window = float(self.cfg.get("SERVER_CONN_RATE_WINDOW", 10.0) or 10.0)
-        except (TypeError, ValueError):
-            window = 10.0
-        try:
-            block = float(self.cfg.get("SERVER_CONN_RATE_BLOCK", 5.0) or 5.0)
-        except (TypeError, ValueError):
-            block = 5.0
-        return max(0, limit), max(1.0, min(3600.0, window)), max(0.0, min(3600.0, block))
-
-    def _accepts_new_connection(self, ip: str) -> bool:
-        limit, window, block = self._connection_rate_settings()
-        if limit <= 0:
-            return True
-        key = str(ip or "").strip() or "-"
-        now = time.time()
-        with self._connection_rate_lock:
-            blocked_until = float(self._connection_rate_blocked_until.get(key, 0.0) or 0.0)
-            if blocked_until > now:
-                log.warning(
-                    "Connection rate limited: ip=%s retry_after=%.1fs",
-                    key,
-                    max(0.0, blocked_until - now),
-                )
-                return False
-            if blocked_until:
-                self._connection_rate_blocked_until.pop(key, None)
-
-            attempts = [
-                ts for ts in self._connection_rate_attempts.get(key, [])
-                if now - float(ts or 0.0) < window
-            ]
-            if len(attempts) >= limit:
-                self._connection_rate_attempts[key] = attempts
-                if block > 0:
-                    self._connection_rate_blocked_until[key] = now + block
-                log.warning(
-                    "Connection rate limit tripped: ip=%s count=%d limit=%d window=%.1fs block=%.1fs",
-                    key,
-                    len(attempts) + 1,
-                    limit,
-                    window,
-                    block,
-                )
-                return False
-
-            attempts.append(now)
-            self._connection_rate_attempts[key] = attempts
-            if len(self._connection_rate_attempts) > 4096:
-                stale = [
-                    addr for addr, seen in self._connection_rate_attempts.items()
-                    if not seen or now - float(seen[-1] or 0.0) >= window
-                ]
-                for addr in stale[:512]:
-                    self._connection_rate_attempts.pop(addr, None)
-                    self._connection_rate_blocked_until.pop(addr, None)
-            return True
-
-    def _lobby_max_connections(self) -> int:
-        return self._cfg_int("SERVER_MAX_CONNECTIONS", 64, min_value=0, max_value=100000)
-
-    def _open_lobby_connection_slot(self, ip: str) -> bool:
-        max_connections = self._lobby_max_connections()
-        if max_connections <= 0:
-            return True
-        with self._lobby_connection_lock:
-            if self._lobby_active_connections >= max_connections:
-                log.warning(
-                    "Lobby connection limit reached: ip=%s active=%d max=%d",
-                    ip or "-",
-                    self._lobby_active_connections,
-                    max_connections,
-                )
-                return False
-            self._lobby_active_connections += 1
-            return True
-
-    def _close_lobby_connection_slot(self) -> None:
-        with self._lobby_connection_lock:
-            self._lobby_active_connections = max(0, self._lobby_active_connections - 1)
-
     def _sync_udp_relay_verbose_filter(self) -> None:
         _udp_relay_verbose_filter.enabled = bool(self._udp_relay_verbose)
 
-    def auth_verify_enabled(self) -> bool:
-        return self._cfg_flag("AUTH_VERIFY")
+    def lan_auth_verify_enabled(self) -> bool:
+        return self._cfg_flag("LAN_AUTH_VERIFY", "AUTH_VERIFY")
 
-    def auth_capture_enabled(self) -> bool:
-        return self._cfg_flag("AUTH_CAPTURE")
+    def lan_auth_capture_enabled(self) -> bool:
+        return self._cfg_flag("LAN_AUTH_CAPTURE", "AUTH_CAPTURE")
 
-    def auth_auto_enroll_enabled(self) -> bool:
-        return self._cfg_flag("AUTH_AUTO_ENROLL")
+    def lan_auth_auto_enroll_enabled(self) -> bool:
+        return self._cfg_flag("LAN_AUTH_AUTO_ENROLL", "AUTH_AUTO_ENROLL")
 
-    def auth_allow_create_enabled(self) -> bool:
-        return self._cfg_flag("AUTH_ALLOW_CREATE")
+    def lan_auth_allow_create_enabled(self) -> bool:
+        return self._cfg_flag("LAN_AUTH_ALLOW_CREATE", "AUTH_ALLOW_CREATE")
 
-    def auth_mode(self) -> str:
-        mode = str(self.cfg.get("AUTH_MODE", "password") or "password").strip().lower()
+    def lan_auth_mode(self) -> str:
+        mode = str(self.cfg.get("LAN_AUTH_MODE", self.cfg.get("AUTH_MODE", "password")) or "password").strip().lower()
         if mode in ("account", "user", "whitelist", "name"):
             return "account"
         return "password"
 
-    def auth_migrate_plaintext_enabled(self) -> bool:
-        return self._cfg_flag("AUTH_MIGRATE_PLAINTEXT", "AUTH_SECURE_STORE") or str(
-            self.cfg.get("AUTH_MIGRATE_PLAINTEXT", "1") or "1"
-        ).strip().lower() not in ("0", "false", "no", "off", "")
+    def lan_auth_migrate_plaintext_enabled(self) -> bool:
+        raw = self.cfg.get("LAN_AUTH_MIGRATE_PLAINTEXT", self.cfg.get("AUTH_MIGRATE_PLAINTEXT", "1"))
+        return (
+            self._cfg_flag("LAN_AUTH_MIGRATE_PLAINTEXT", "LAN_AUTH_SECURE_STORE", "AUTH_MIGRATE_PLAINTEXT", "AUTH_SECURE_STORE")
+            or str(raw or "1").strip().lower() not in ("0", "false", "no", "off", "")
+        )
 
-    def _auth_config_path(self, key: str, default: str) -> str:
-        path = str(self.cfg.get(key, default) or "").strip()
+    def _lan_auth_config_path(self, key: str, default: str) -> str:
+        path = str(self.cfg.get(key, "") or "").strip()
+        if not path and key.startswith("LAN_"):
+            path = str(self.cfg.get(key[4:], "") or "").strip()
         if not path:
             path = default
         if os.path.isabs(path):
             return path
         return os.path.abspath(os.path.join(os.path.dirname(self._config_path), path))
 
-    def _auth_accounts_file(self) -> str:
-        return self._auth_config_path("AUTH_ACCOUNTS_FILE", "data/auth_accounts.json")
+    def _lan_auth_accounts_file(self) -> str:
+        return self._lan_auth_config_path("LAN_AUTH_ACCOUNTS_FILE", "data/auth_accounts.json")
 
-    def _auth_capture_file(self) -> str:
-        return self._auth_config_path("AUTH_CAPTURE_FILE", "data/auth_captures.jsonl")
+    def _lan_auth_capture_file(self) -> str:
+        return self._lan_auth_config_path("LAN_AUTH_CAPTURE_FILE", "data/auth_captures.jsonl")
 
-    def remember_lobby_dir_challenge(self, ip: str, sess: str, mask: str) -> None:
+    def remember_lan_dir_challenge(self, ip: str, sess: str, mask: str) -> None:
         key = str(ip or "").strip()
         if not key or not sess or not mask:
             return
-        with self._lobby_dir_challenges_lock:
-            self._lobby_dir_challenges[key] = (str(sess), str(mask), time.time())
+        with self._lan_dir_challenges_lock:
+            self._lan_dir_challenges[key] = (str(sess), str(mask), time.time())
 
-    def recent_lobby_dir_challenge(self, ip: str, *, max_age: float = 30.0) -> tuple[str, str]:
+    def recent_lan_dir_challenge(self, ip: str, *, max_age: float = 30.0) -> tuple[str, str]:
         key = str(ip or "").strip()
         if not key:
             return "", ""
         now = time.time()
-        with self._lobby_dir_challenges_lock:
-            item = self._lobby_dir_challenges.get(key)
+        with self._lan_dir_challenges_lock:
+            item = self._lan_dir_challenges.get(key)
             if not item:
                 return "", ""
             sess, mask, seen_at = item
             if (now - float(seen_at)) > max_age:
-                self._lobby_dir_challenges.pop(key, None)
+                self._lan_dir_challenges.pop(key, None)
                 return "", ""
             return sess, mask
 
-    def sweep_lobby_dir_challenges(self, *, max_age: float = 60.0) -> None:
+    def sweep_lan_dir_challenges(self, *, max_age: float = 60.0) -> None:
         now = time.time()
-        with self._lobby_dir_challenges_lock:
+        with self._lan_dir_challenges_lock:
             expired = [
-                key for key, (_, _, seen_at) in self._lobby_dir_challenges.items()
+                key for key, (_, _, seen_at) in self._lan_dir_challenges.items()
                 if (now - float(seen_at)) > max_age
             ]
             for key in expired:
-                self._lobby_dir_challenges.pop(key, None)
+                self._lan_dir_challenges.pop(key, None)
 
     @staticmethod
-    def _auth_norm(value) -> str:
+    def _lan_auth_norm(value) -> str:
         return str(value or "").strip().lower()
 
     @staticmethod
-    def _auth_kv_value(kv: dict, *keys: str) -> str:
+    def _lan_auth_kv_value(kv: dict, *keys: str) -> str:
         if not kv:
             return ""
         upper = {str(k).strip().upper(): str(v).strip() for k, v in kv.items()}
@@ -634,7 +411,7 @@ class GameServer:
         return ""
 
     @staticmethod
-    def _auth_list(value) -> List[str]:
+    def _lan_auth_list(value) -> List[str]:
         if value is None:
             return []
         if isinstance(value, list):
@@ -644,7 +421,7 @@ class GameServer:
         out: List[str] = []
         for item in raw_values:
             if isinstance(item, (list, tuple)):
-                out.extend(GameServer._auth_list(item))
+                out.extend(GameServer._lan_auth_list(item))
                 continue
             text = str(item or "").strip()
             if text:
@@ -652,432 +429,11 @@ class GameServer:
         return out
 
     @staticmethod
-    def _auth_bool(value, default: bool = False) -> bool:
-        if value is None:
-            return default
-        if isinstance(value, bool):
-            return value
-        text = str(value).strip().lower()
-        if text in ("1", "true", "yes", "on", "y", "accepted", "accept", "ok", "enabled", "active"):
-            return True
-        if text in ("0", "false", "no", "off", "n", "rejected", "deny", "denied", "disabled", "locked", "banned", ""):
-            return False
-        try:
-            return int(text, 10) != 0
-        except ValueError:
-            return default
-
-    @staticmethod
-    def _auth_reason_alias(value) -> str:
-        text = str(value or "").strip().lower()
-        if not text:
-            return ""
-        if text.startswith("auth") and len(text) == 8:
-            text = text[4:]
-        text = text.replace("-", "_").replace(" ", "_")
-        text = text.split(":", 1)[0]
-        return {
-            "imst": "invalid_auth",
-            "invalid": "invalid_auth",
-            "invalid_auth": "invalid_auth",
-            "unknown_account": "invalid_auth",
-            "logn": "account_in_use",
-            "already_logged_in": "account_in_use",
-            "already_online": "account_in_use",
-            "account_in_use": "account_in_use",
-            "lock": "account_locked",
-            "locked": "account_locked",
-            "account_locked": "account_locked",
-            "disabled": "account_disabled",
-            "account_disabled": "account_disabled",
-            "banned": "admin_ban",
-            "admin_ban": "admin_ban",
-            "pass": "bad_password",
-            "bad_password": "bad_password",
-            "password_error": "bad_password",
-            "ikey": "invalid_key",
-            "invalid_key": "invalid_key",
-            "bad_key": "invalid_key",
-            "invalid_cdkey": "invalid_key",
-            "invalid_cd_key": "invalid_key",
-            "tosa": "tos_not_accepted",
-            "tos": "tos_not_accepted",
-            "tos_not_accepted": "tos_not_accepted",
-            "terms_not_accepted": "tos_not_accepted",
-            "dber": "database_error",
-            "database_error": "database_error",
-            "backend_error": "database_error",
-            "blak": "blacklisted",
-            "blacklist": "blacklisted",
-            "blacklisted": "blacklisted",
-            "blocked": "blacklisted",
-            "shar": "share_not_accepted",
-            "share": "share_not_accepted",
-            "share_required": "share_not_accepted",
-            "share_not_accepted": "share_not_accepted",
-            "miss": "missing_fields",
-            "missing_fields": "missing_fields",
-            "missing_required_fields": "missing_fields",
-            "filt": "filtered",
-            "filter": "filtered",
-            "filtered": "filtered",
-            "filter_failed": "filtered",
-            "profane": "filtered",
-            "time": "auth_timeout",
-            "timeout": "auth_timeout",
-            "auth_timeout": "auth_timeout",
-            "backend_timeout": "auth_timeout",
-            "over": "invalid_state",
-            "invalid_state": "invalid_state",
-            "backend_over": "invalid_state",
-        }.get(text, "")
-
-    def _auth_required_fields(self) -> List[str]:
-        raw = str(self.cfg.get("AUTH_REQUIRED_FIELDS", "") or "").strip()
-        if not raw:
-            return []
-        fields: List[str] = []
-        for item in raw.replace(";", ",").replace(" ", ",").split(","):
-            field = item.strip().upper()
-            if field and field not in fields:
-                fields.append(field)
-        return fields
-
-    def _auth_missing_required_fields(self, kv: dict) -> List[str]:
-        return [
-            field for field in self._auth_required_fields()
-            if not self._auth_kv_value(kv, field)
-        ]
-
-    def _auth_account_reject_reason(self, account: dict) -> str:
-        for key in ("auth_reason", "auth_status", "auth_code", "login_reason", "login_status", "status"):
-            reason = self._auth_reason_alias(account.get(key, ""))
-            if reason:
-                return reason
-        if self._auth_bool(account.get("locked"), False) or self._auth_bool(account.get("account_locked"), False):
-            return "account_locked"
-        if self._auth_bool(account.get("disabled"), False) or not self._auth_bool(account.get("enabled"), True):
-            return "account_disabled"
-        if self._auth_bool(account.get("banned"), False):
-            return "admin_ban"
-        if self._auth_bool(account.get("blacklisted"), False) or self._auth_bool(account.get("blocked"), False):
-            return "blacklisted"
-        if "tos_accepted" in account and not self._auth_bool(account.get("tos_accepted"), False):
-            return "tos_not_accepted"
-        if "share_accepted" in account and not self._auth_bool(account.get("share_accepted"), False):
-            return "share_not_accepted"
-        return ""
-
-    def _auth_account_key_reject_reason(self, account: dict, kv: dict) -> str:
-        expected: List[str] = []
-        for key in ("cdkey", "cd_key", "key", "lkey", "product_key", "serial"):
-            expected.extend(self._auth_list(account.get(key)))
-        for key in ("cdkeys", "cd_keys", "keys", "lkeys", "product_keys", "serials"):
-            expected.extend(self._auth_list(account.get(key)))
-        if not expected:
-            return ""
-        supplied = self._auth_kv_value(
-            kv,
-            "CDKEY",
-            "CD_KEY",
-            "KEY",
-            "LKEY",
-            "PRODUCT_KEY",
-            "SERIAL",
-            "REGKEY",
-        )
-        if not supplied:
-            return "invalid_key"
-        supplied_norm = self._auth_norm(supplied)
-        for value in expected:
-            if supplied_norm == self._auth_norm(value):
-                return ""
-        return "invalid_key"
-
-    @staticmethod
-    def _auth_reason_code(reason: str) -> str:
-        key = GameServer._auth_reason_alias(reason) or str(reason or "").strip().lower()
-        if key.startswith("auth") and len(key) == 8:
-            key = key[4:]
-        if len(key) == 4 and key in {
-            "imst", "logn", "lock", "pass", "ikey", "tosa", "dber",
-            "blak", "shar", "miss", "filt", "time", "over",
-        }:
-            return key
-        return {
-            "invalid_auth": "imst",
-            "unknown_account": "imst",
-            "missing_identifier": "imst",
-            "account_in_use": "logn",
-            "account_locked": "lock",
-            "account_disabled": "lock",
-            "admin_ban": "lock",
-            "rate_limited": "lock",
-            "bad_password": "pass",
-            "missing_password": "pass",
-            "invalid_key": "ikey",
-            "tos_not_accepted": "tosa",
-            "database_error": "dber",
-            "no_accounts": "dber",
-            "save_failed": "dber",
-            "blacklisted": "blak",
-            "share_not_accepted": "shar",
-            "missing_fields": "miss",
-            "filtered": "filt",
-            "auth_timeout": "time",
-            "invalid_state": "over",
-        }.get(key, "")
-
-    @staticmethod
-    def _auth_supported_codes_text() -> str:
-        return "imst logn lock pass ikey tosa dber blak shar miss filt time over"
-
-    def _auth_force_reject_ttl(self) -> float:
-        try:
-            return max(1.0, float(self.cfg.get("AUTH_FORCE_REJECT_TTL", 300) or 300))
-        except Exception:
-            return 300.0
-
-    def _auth_request_identities(self, kv: dict, identifier: str = "") -> Set[str]:
-        identities: Set[str] = set()
-        for value in (
-            identifier,
-            self._auth_kv_value(kv, "EMAIL", "MAIL", "PMAIL", "U2_OLX_MAIL"),
-            self._auth_kv_value(kv, "USER", "USERNAME", "LOGIN"),
-            self._auth_kv_value(kv, "NAME"),
-            self._auth_kv_value(kv, "PERS", "PERSO", "PERSONA"),
-        ):
-            norm = self._auth_norm(value)
-            if norm:
-                identities.add(norm)
-        return identities
-
-    def _auth_clear_expired_forced_rejects_locked(self, now: float) -> None:
-        self._auth_forced_rejects = [
-            entry for entry in self._auth_forced_rejects
-            if float(entry.get("expires_at", 0.0) or 0.0) > now
-        ]
-
-    def _auth_set_forced_reject(self, code_or_reason: str, identifier: str = "", uses: int = 1) -> str:
-        reason = self._auth_reason_alias(code_or_reason)
-        code = self._auth_reason_code(code_or_reason)
-        if not reason or not code:
-            return f"unknown auth code '{code_or_reason}'. known: {self._auth_supported_codes_text()}"
-        try:
-            uses = int(uses)
-        except (TypeError, ValueError):
-            uses = 1
-        if uses <= 0:
-            return "usage: authcode <code> [identifier|*] [uses]"
-        identifier = str(identifier or "").strip()
-        target = "" if identifier in ("", "*", "any", "ANY") else self._auth_norm(identifier)
-        now = time.time()
-        entry = {
-            "reason": reason,
-            "code": code,
-            "identifier": identifier if target else "*",
-            "target": target,
-            "remaining": max(1, min(100, uses)),
-            "created_at": now,
-            "expires_at": now + self._auth_force_reject_ttl(),
-        }
-        with self._auth_lock:
-            self._auth_clear_expired_forced_rejects_locked(now)
-            self._auth_forced_rejects.append(entry)
-        scope = f"matching '{identifier}'" if target else "any next login"
-        return f"queued auth{code} ({reason}) for {scope}, uses={entry['remaining']}"
-
-    def _auth_pop_forced_reject(self, kv: dict, identifier: str) -> str:
-        now = time.time()
-        request_ids = self._auth_request_identities(kv, identifier)
-        matched_reason = ""
-        with self._auth_lock:
-            kept: List[dict] = []
-            for entry in self._auth_forced_rejects:
-                if float(entry.get("expires_at", 0.0) or 0.0) <= now:
-                    continue
-                target = str(entry.get("target", "") or "")
-                matches = not target or target in request_ids
-                if matches and not matched_reason:
-                    matched_reason = str(entry.get("reason", "") or "")
-                    remaining = int(entry.get("remaining", 1) or 1) - 1
-                    if remaining > 0:
-                        updated = dict(entry)
-                        updated["remaining"] = remaining
-                        kept.append(updated)
-                    continue
-                kept.append(entry)
-            self._auth_forced_rejects = kept
-        return matched_reason
-
-    def _format_auth_forced_rejects(self) -> str:
-        now = time.time()
-        with self._auth_lock:
-            self._auth_clear_expired_forced_rejects_locked(now)
-            entries = [dict(entry) for entry in self._auth_forced_rejects]
-        if not entries:
-            return "no pending authcode overrides"
-        lines = ["Code Reason               Target           Uses Expires"]
-        for entry in entries:
-            remaining_s = max(0, int(float(entry.get("expires_at", now) or now) - now))
-            lines.append(
-                f"{str(entry.get('code', '-')):<4} "
-                f"{str(entry.get('reason', '-')):<20.20} "
-                f"{str(entry.get('identifier', '*')):<15.15} "
-                f"{int(entry.get('remaining', 0) or 0):<4} "
-                f"{remaining_s}s"
-            )
-        return "\n".join(lines)
-
-    def _clear_auth_forced_rejects(self) -> str:
-        with self._auth_lock:
-            count = len(self._auth_forced_rejects)
-            self._auth_forced_rejects.clear()
-        return f"cleared {count} authcode override(s)"
-
-    @staticmethod
-    def _persona_code_alias(value: str) -> tuple[str, str]:
-        return persona_policy.parse_code(value)
-
-    @staticmethod
-    def _persona_supported_codes_text() -> str:
-        return persona_policy.supported_codes_text()
-
-    def _persona_set_forced_reject(self, code_or_reason: str, persona: str = "", uses: int = 1) -> str:
-        cmd, reason = self._persona_code_alias(code_or_reason)
-        if not cmd or not reason:
-            return f"unknown persona code '{code_or_reason}'. known: {self._persona_supported_codes_text()}"
-        try:
-            uses = int(uses)
-        except (TypeError, ValueError):
-            uses = 1
-        if uses <= 0:
-            return "usage: personacode <code> [persona|*] [uses]"
-        persona = str(persona or "").strip()
-        target = "" if persona in ("", "*", "any", "ANY") else self._auth_norm(persona)
-        now = time.time()
-        entry = {
-            "cmd": cmd,
-            "reason": reason,
-            "code": f"{cmd}{reason}",
-            "persona": persona if target else "*",
-            "target": target,
-            "remaining": max(1, min(100, uses)),
-            "created_at": now,
-            "expires_at": now + self._auth_force_reject_ttl(),
-        }
-        with self._auth_lock:
-            self._persona_clear_expired_forced_rejects_locked(now)
-            self._persona_forced_rejects.append(entry)
-        stage_label = "create-persona/cper" if cmd == "cper" else "select-persona/pers"
-        scope = f"matching '{persona}' on {stage_label}" if target else f"any next {stage_label} request"
-        return f"queued {entry['code']} ({reason}) for {scope}, uses={entry['remaining']}"
-
-    def persona_blacklist_reject_reason(self, persona: str, stage: str) -> str:
-        reason, match_type, match_value = persona_policy.blacklist_reject(
-            self.cfg,
-            self._config_path,
-            persona,
-            stage,
-            warn=log.warning,
-        )
-        if not reason:
-            return ""
-        log.warning(
-            "Persona blacklist matched stage=%s persona=%r type=%s value=%r reject=%s",
-            stage,
-            persona,
-            match_type,
-            match_value,
-            reason,
-        )
-        return reason
-
-    def _persona_clear_expired_forced_rejects_locked(self, now: float) -> None:
-        self._persona_forced_rejects = [
-            entry for entry in self._persona_forced_rejects
-            if float(entry.get("expires_at", 0.0) or 0.0) > now
-        ]
-
-    def pop_forced_persona_reject(self, cmd: str, persona: str) -> str:
-        now = time.time()
-        cmd = str(cmd or "").strip().lower()
-        persona_key = self._auth_norm(persona)
-        matched_reason = ""
-        with self._auth_lock:
-            kept: List[dict] = []
-            for entry in self._persona_forced_rejects:
-                if float(entry.get("expires_at", 0.0) or 0.0) <= now:
-                    continue
-                matches_cmd = str(entry.get("cmd", "") or "") == cmd
-                target = str(entry.get("target", "") or "")
-                matches_persona = not target or target == persona_key
-                if matches_cmd and matches_persona and not matched_reason:
-                    matched_reason = str(entry.get("reason", "") or "")
-                    remaining = int(entry.get("remaining", 1) or 1) - 1
-                    if remaining > 0:
-                        updated = dict(entry)
-                        updated["remaining"] = remaining
-                        kept.append(updated)
-                    continue
-                kept.append(entry)
-            self._persona_forced_rejects = kept
-        return matched_reason
-
-    def _format_persona_forced_rejects(self) -> str:
-        now = time.time()
-        with self._auth_lock:
-            self._persona_clear_expired_forced_rejects_locked(now)
-            entries = [dict(entry) for entry in self._persona_forced_rejects]
-        if not entries:
-            return "no pending personacode overrides"
-        lines = ["Code     Persona         Uses Expires"]
-        for entry in entries:
-            remaining_s = max(0, int(float(entry.get("expires_at", now) or now) - now))
-            lines.append(
-                f"{str(entry.get('code', '-')):<8} "
-                f"{str(entry.get('persona', '*')):<15.15} "
-                f"{int(entry.get('remaining', 0) or 0):<4} "
-                f"{remaining_s}s"
-            )
-        return "\n".join(lines)
-
-    def _clear_persona_forced_rejects(self) -> str:
-        with self._auth_lock:
-            count = len(self._persona_forced_rejects)
-            self._persona_forced_rejects.clear()
-        return f"cleared {count} personacode override(s)"
-
-    def _format_auth_reject_timing(self) -> str:
-        repeat = self.cfg.get("AUTH_REJECT_REPEAT", 4)
-        interval = self.cfg.get("AUTH_REJECT_INTERVAL", 0.25)
-        close_delay = self.cfg.get("AUTH_REJECT_CLOSE_DELAY", 1.10)
-        return f"authreject repeat={repeat} interval={interval} close_delay={close_delay}"
-
-    def _set_auth_reject_timing(self, repeat, interval, close_delay) -> str:
-        try:
-            repeat_i = int(repeat)
-            interval_f = float(interval)
-            close_delay_f = float(close_delay)
-        except (TypeError, ValueError):
-            return "usage: authreject <repeat> <interval_sec> <close_delay_sec>"
-        if repeat_i < 1 or repeat_i > 8:
-            return "authreject repeat must be 1..8"
-        if interval_f < 0.0 or interval_f > 2.0:
-            return "authreject interval_sec must be 0..2"
-        if close_delay_f < 0.2 or close_delay_f > 10.0:
-            return "authreject close_delay_sec must be 0.2..10"
-        self.cfg["AUTH_REJECT_REPEAT"] = repeat_i
-        self.cfg["AUTH_REJECT_INTERVAL"] = interval_f
-        self.cfg["AUTH_REJECT_CLOSE_DELAY"] = close_delay_f
-        return self._format_auth_reject_timing()
-
-    @staticmethod
-    def _auth_pbkdf2_iterations() -> int:
+    def _lan_auth_pbkdf2_iterations() -> int:
         return 210_000
 
     @staticmethod
-    def _auth_pbkdf2_encode(secret: str, *, iterations: int = 210_000, salt: bytes | None = None) -> str:
+    def _lan_auth_pbkdf2_encode(secret: str, *, iterations: int = 210_000, salt: bytes | None = None) -> str:
         secret_bytes = str(secret or "").encode("utf-8", errors="ignore")
         salt = os.urandom(16) if salt is None else salt
         digest = hashlib.pbkdf2_hmac("sha256", secret_bytes, salt, int(iterations))
@@ -1088,7 +444,7 @@ class GameServer:
         )
 
     @staticmethod
-    def _auth_pbkdf2_verify(secret: str, encoded: str) -> bool:
+    def _lan_auth_pbkdf2_verify(secret: str, encoded: str) -> bool:
         try:
             alg, iter_text, salt_text, digest_text = str(encoded or "").split("$", 3)
             if alg != "pbkdf2_sha256":
@@ -1107,29 +463,29 @@ class GameServer:
             return False
 
     @staticmethod
-    def _auth_rol8(value: int, count: int) -> int:
+    def _lan_auth_rol8(value: int, count: int) -> int:
         value &= 0xFF
         count &= 7
         return ((value << count) | (value >> (8 - count))) & 0xFF
 
     @staticmethod
-    def _auth_ror8(value: int, count: int) -> int:
+    def _lan_auth_ror8(value: int, count: int) -> int:
         value &= 0xFF
         count &= 7
         return ((value >> count) | (value << (8 - count))) & 0xFF
 
     @staticmethod
-    def _auth_make_pass_token(password: str, mask: str) -> str:
+    def _lan_auth_make_pass_token(password: str, mask: str) -> str:
         mask_bytes = str(mask or "0").encode("ascii", errors="ignore") or b"0"
         state = 0
         out = ["$"]
         for index, ch in enumerate(str(password or "").encode("latin-1", errors="ignore")):
-            state = GameServer._auth_rol8(ch ^ state, 3) ^ mask_bytes[index % len(mask_bytes)]
+            state = GameServer._lan_auth_rol8(ch ^ state, 3) ^ mask_bytes[index % len(mask_bytes)]
             out.append(f"{state & 0xFF:02x}")
         return "".join(out)
 
     @staticmethod
-    def _auth_decode_pass_token(token: str, mask: str) -> Optional[str]:
+    def _lan_auth_decode_pass_token(token: str, mask: str) -> Optional[str]:
         token = str(token or "").strip()
         if not token.startswith("$") or len(token) < 3 or (len(token) - 1) % 2:
             return None
@@ -1143,60 +499,33 @@ class GameServer:
         out = bytearray()
         for index, encoded in enumerate(values):
             mask_byte = mask_bytes[index % len(mask_bytes)]
-            ch = GameServer._auth_ror8(encoded ^ mask_byte, 3) ^ state
+            ch = GameServer._lan_auth_ror8(encoded ^ mask_byte, 3) ^ state
             out.append(ch & 0xFF)
             state = encoded & 0xFF
         return out.decode("latin-1", errors="ignore")
 
     @staticmethod
-    def _auth_add_mask_candidate(masks: List[str], value: str) -> None:
-        text = str(value or "").strip()
-        if not text:
-            return
-
-        def add(candidate: str) -> None:
-            candidate = str(candidate or "").strip()
-            if candidate and candidate not in masks:
-                masks.append(candidate)
-
-        add(text)
-
-        # Some clients send SKEY as "$" + hex("Public Key").  The password
-        # codec needs the real key bytes too, not only the visible hex text.
-        hex_text = text[1:] if text.startswith("$") else text
-        if len(hex_text) >= 2 and len(hex_text) % 2 == 0:
-            try:
-                raw = bytes.fromhex(hex_text)
-            except ValueError:
-                raw = b""
-            if raw:
-                add(hex_text)
-                try:
-                    add(raw.decode("latin-1", errors="ignore"))
-                except Exception:
-                    pass
-
-    @staticmethod
-    def _auth_mask_candidates(kv: dict) -> List[str]:
+    def _lan_auth_mask_candidates(kv: dict) -> List[str]:
         masks: List[str] = []
-        for key in ("MASK", "SKEY", "AUTH_SKEY", "PSES", "SESS", "CHAL", "CHALLENGE"):
-            value = GameServer._auth_kv_value(kv, key)
-            GameServer._auth_add_mask_candidate(masks, value)
+        for key in ("MASK", "PSES", "SESS", "CHAL", "CHALLENGE"):
+            value = GameServer._lan_auth_kv_value(kv, key)
+            if value and value not in masks:
+                masks.append(value)
         return masks
 
     @staticmethod
-    def _auth_password_hashes(account: dict) -> List[str]:
+    def _lan_auth_password_hashes(account: dict) -> List[str]:
         hashes: List[str] = []
         for key in ("password_pbkdf2", "pass_pbkdf2", "pass_wire_pbkdf2", "password_hash", "pass_hash"):
             value = str(account.get(key, "") or "").strip()
             if value:
                 hashes.append(value)
         for key in ("password_hashes", "pass_hashes", "pass_wire_hashes"):
-            hashes.extend(GameServer._auth_list(account.get(key)))
+            hashes.extend(GameServer._lan_auth_list(account.get(key)))
         return hashes
 
     @staticmethod
-    def _auth_plain_password_keys() -> tuple[str, ...]:
+    def _lan_auth_plain_password_keys() -> tuple[str, ...]:
         return (
             "password",
             "pass",
@@ -1208,50 +537,50 @@ class GameServer:
         )
 
     @staticmethod
-    def _auth_plain_password_list_keys() -> tuple[str, ...]:
+    def _lan_auth_plain_password_list_keys() -> tuple[str, ...]:
         return ("passwords", "passes", "pass_wires", "password_wires")
 
     @staticmethod
-    def _auth_account_identities(account: dict) -> Set[str]:
+    def _lan_auth_account_identities(account: dict) -> Set[str]:
         identities: Set[str] = set()
         for key in ("__key", "email", "mail", "name", "username", "user", "login", "id"):
-            value = GameServer._auth_norm(account.get(key, ""))
+            value = GameServer._lan_auth_norm(account.get(key, ""))
             if value:
                 identities.add(value)
         for key in ("aliases", "emails", "names", "usernames", "logins"):
-            for value in GameServer._auth_list(account.get(key)):
-                norm = GameServer._auth_norm(value)
+            for value in GameServer._lan_auth_list(account.get(key)):
+                norm = GameServer._lan_auth_norm(value)
                 if norm:
                     identities.add(norm)
         return identities
 
-    def _auth_password_candidates(self, kv: dict, supplied: str) -> List[str]:
+    def _lan_auth_password_candidates(self, kv: dict, supplied: str) -> List[str]:
         candidates: List[str] = []
         supplied = str(supplied or "")
         if supplied:
             candidates.append(supplied)
-        masks = self._auth_mask_candidates(kv)
-        fixed_mask = str(self.cfg.get("BOOTSTRAP_DIR_MASK", "") or "").strip()
+        masks = self._lan_auth_mask_candidates(kv)
+        fixed_mask = str(self.cfg.get("LAN_DIR_MASK", "") or "").strip()
         if fixed_mask and fixed_mask not in masks:
             masks.append(fixed_mask)
         legacy_masks: List[str] = []
-        for item in str(self.cfg.get("AUTH_LEGACY_MASKS", "") or "").replace(";", ",").split(","):
+        for item in str(self.cfg.get("LAN_AUTH_LEGACY_MASKS", "") or "").replace(";", ",").split(","):
             legacy_mask = item.strip()
             if legacy_mask and legacy_mask not in legacy_masks:
                 legacy_masks.append(legacy_mask)
         for mask in masks:
-            decoded = self._auth_decode_pass_token(supplied, mask)
+            decoded = self._lan_auth_decode_pass_token(supplied, mask)
             if decoded and decoded not in candidates:
                 candidates.append(decoded)
             if decoded:
                 for legacy_mask in legacy_masks:
-                    legacy_token = self._auth_make_pass_token(decoded, legacy_mask)
+                    legacy_token = self._lan_auth_make_pass_token(decoded, legacy_mask)
                     if legacy_token and legacy_token not in candidates:
                         candidates.append(legacy_token)
         return candidates
 
     @staticmethod
-    def _auth_password_matches_candidate(account: dict, supplied: str) -> bool:
+    def _lan_auth_password_matches_candidate(account: dict, supplied: str) -> bool:
         if supplied is None:
             supplied = ""
         supplied = str(supplied)
@@ -1265,19 +594,19 @@ class GameServer:
                 if expected == supplied_sha256:
                     return True
         for key in ("password_sha256s", "pass_sha256s", "pass_wire_sha256s"):
-            values = GameServer._auth_list(account.get(key))
-            if values:
-                has_fast_hash = True
-            for expected in values:
-                if str(expected or "").strip().lower() == supplied_sha256:
-                    return True
+            for expected in GameServer._lan_auth_list(account.get(key)):
+                expected = str(expected or "").strip().lower()
+                if expected:
+                    has_fast_hash = True
+                    if expected == supplied_sha256:
+                        return True
 
-        for key in GameServer._auth_plain_password_keys():
+        for key in GameServer._lan_auth_plain_password_keys():
             expected = account.get(key)
             if expected is not None and str(expected) == supplied:
                 return True
-        for key in GameServer._auth_plain_password_list_keys():
-            for expected in GameServer._auth_list(account.get(key)):
+        for key in GameServer._lan_auth_plain_password_list_keys():
+            for expected in GameServer._lan_auth_list(account.get(key)):
                 if expected == supplied:
                     return True
 
@@ -1287,26 +616,22 @@ class GameServer:
             if expected and expected == supplied_md5:
                 return True
 
-        # If a fast hash list exists, do not burn CPU on PBKDF2 for every wrong
-        # candidate.  The caller will try the next candidate immediately.  This
-        # fixes the 30-50 second reconnect delay on Termux accounts that contain
-        # many pass_wire_hashes.
         if has_fast_hash:
             return False
 
-        for encoded in GameServer._auth_password_hashes(account):
-            if GameServer._auth_pbkdf2_verify(supplied, encoded):
+        for encoded in GameServer._lan_auth_password_hashes(account):
+            if GameServer._lan_auth_pbkdf2_verify(supplied, encoded):
                 return True
         return False
 
-    def _auth_password_matches(self, account: dict, kv: dict, supplied: str) -> bool:
-        for candidate in self._auth_password_candidates(kv, supplied):
-            if self._auth_password_matches_candidate(account, candidate):
+    def _lan_auth_password_matches(self, account: dict, kv: dict, supplied: str) -> bool:
+        for candidate in self._lan_auth_password_candidates(kv, supplied):
+            if self._lan_auth_password_matches_candidate(account, candidate):
                 return True
         return False
 
     @staticmethod
-    def _auth_password_fingerprints(account: dict, supplied: str) -> tuple[str, List[str]]:
+    def _lan_auth_password_fingerprints(account: dict, supplied: str) -> tuple[str, List[str]]:
         def fp(value: str) -> str:
             text = str(value or "")
             digest = hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()[:12]
@@ -1314,18 +639,18 @@ class GameServer:
 
         supplied_fp = fp(supplied)
         expected: List[str] = []
-        for encoded in GameServer._auth_password_hashes(account):
+        for encoded in GameServer._lan_auth_password_hashes(account):
             parts = str(encoded).split("$", 3)
             if len(parts) >= 2 and parts[0] == "pbkdf2_sha256":
                 expected.append(f"pbkdf2_sha256:iter={parts[1]}")
             else:
                 expected.append("hash:unknown")
-        for key in GameServer._auth_plain_password_keys():
+        for key in GameServer._lan_auth_plain_password_keys():
             value = account.get(key)
             if value is not None:
                 expected.append(f"{key}:{fp(str(value))}")
-        for key in GameServer._auth_plain_password_list_keys():
-            for value in GameServer._auth_list(account.get(key)):
+        for key in GameServer._lan_auth_plain_password_list_keys():
+            for value in GameServer._lan_auth_list(account.get(key)):
                 expected.append(f"{key}:{fp(value)}")
         for key in ("password_sha256", "pass_sha256", "pass_wire_sha256"):
             value = str(account.get(key, "") or "").strip().lower()
@@ -1338,7 +663,7 @@ class GameServer:
         return supplied_fp, expected
 
     @staticmethod
-    def _auth_extract_accounts(data) -> List[dict]:
+    def _lan_auth_extract_accounts(data) -> List[dict]:
         if isinstance(data, list):
             return [dict(item) for item in data if isinstance(item, dict)]
         if not isinstance(data, dict):
@@ -1365,119 +690,124 @@ class GameServer:
                 out.append(item)
         return out
 
-    def _auth_secure_account(self, account: dict) -> tuple[dict, bool]:
+    def _lan_auth_secure_account(self, account: dict) -> tuple[dict, bool]:
         if not isinstance(account, dict):
             return {}, False
         secured = dict(account)
         changed = False
-        hashes = list(self._auth_password_hashes(secured))
 
-        for key in self._auth_plain_password_keys():
+        sha256s: List[str] = []
+        for key in ("password_sha256", "pass_sha256", "pass_wire_sha256"):
+            value = str(secured.get(key, "") or "").strip().lower()
+            if value:
+                sha256s.append(value)
+        for key in ("password_sha256s", "pass_sha256s", "pass_wire_sha256s"):
+            sha256s.extend(str(v or "").strip().lower() for v in self._lan_auth_list(secured.get(key)))
+
+        for key in self._lan_auth_plain_password_keys():
             value = secured.pop(key, None)
             if value is None:
                 continue
-            text = str(value)
-            if text:
-                hashes.append(self._auth_pbkdf2_encode(text, iterations=self._auth_pbkdf2_iterations()))
+            text_value = str(value)
+            if text_value:
+                sha256s.append(hashlib.sha256(text_value.encode("utf-8", errors="ignore")).hexdigest())
             changed = True
 
-        for key in self._auth_plain_password_list_keys():
-            values = self._auth_list(secured.pop(key, None))
+        for key in self._lan_auth_plain_password_list_keys():
+            values = self._lan_auth_list(secured.pop(key, None))
             if values:
-                for text in values:
-                    hashes.append(self._auth_pbkdf2_encode(text, iterations=self._auth_pbkdf2_iterations()))
+                for text_value in values:
+                    sha256s.append(hashlib.sha256(str(text_value).encode("utf-8", errors="ignore")).hexdigest())
                 changed = True
 
-        if hashes:
-            deduped: List[str] = []
-            seen = set()
-            for item in hashes:
-                text = str(item or "").strip()
-                if text and text not in seen:
-                    seen.add(text)
-                    deduped.append(text)
-            if len(deduped) == 1:
-                if secured.get("pass_wire_pbkdf2") != deduped[0]:
-                    secured["pass_wire_pbkdf2"] = deduped[0]
+        deduped: List[str] = []
+        seen = set()
+        for item in sha256s:
+            item = str(item or "").strip().lower()
+            if item and item not in seen:
+                seen.add(item)
+                deduped.append(item)
+        if deduped and secured.get("pass_wire_sha256s") != deduped:
+            secured["pass_wire_sha256s"] = deduped
+            changed = True
+
+        if deduped:
+            for key in ("pass_wire_hashes", "pass_wire_pbkdf2", "password_pbkdf2", "pass_pbkdf2", "password_hash", "pass_hash"):
+                if key in secured:
+                    secured.pop(key, None)
                     changed = True
-                secured.pop("pass_wire_hashes", None)
-            else:
-                if secured.get("pass_wire_hashes") != deduped:
-                    secured["pass_wire_hashes"] = deduped
-                    changed = True
-                secured.pop("pass_wire_pbkdf2", None)
         return secured, changed
 
-    def _auth_secure_accounts(self, accounts: List[dict]) -> tuple[List[dict], bool]:
-        if not self.auth_migrate_plaintext_enabled():
+    def _lan_auth_secure_accounts(self, accounts: List[dict]) -> tuple[List[dict], bool]:
+        if not self.lan_auth_migrate_plaintext_enabled():
             return accounts, False
         secured_accounts: List[dict] = []
         changed = False
         for account in accounts:
-            secured, item_changed = self._auth_secure_account(account)
+            secured, item_changed = self._lan_auth_secure_account(account)
             secured_accounts.append(secured)
             changed = changed or item_changed
         return secured_accounts, changed
 
-    def _load_auth_accounts(self) -> List[dict]:
-        path = self._auth_accounts_file()
-        with self._auth_accounts_lock:
+    def _load_lan_auth_accounts(self) -> List[dict]:
+        path = self._lan_auth_accounts_file()
+        with self._lan_auth_accounts_lock:
             if not os.path.exists(path):
-                self._auth_accounts_path = path
-                self._auth_accounts_mtime = -1.0
-                self._auth_accounts_cache = []
+                self._lan_auth_accounts_path = path
+                self._lan_auth_accounts_mtime = -1.0
+                self._lan_auth_accounts_cache = []
                 return []
             try:
                 mtime = os.path.getmtime(path)
             except OSError:
-                self._auth_accounts_cache = []
+                self._lan_auth_accounts_cache = []
                 return []
-            if path == self._auth_accounts_path and mtime == self._auth_accounts_mtime:
-                return self._auth_accounts_cache
+            if path == self._lan_auth_accounts_path and mtime == self._lan_auth_accounts_mtime:
+                return self._lan_auth_accounts_cache
             try:
                 with open(path, "r", encoding="utf-8") as fh:
                     data = json.load(fh)
-                accounts = self._auth_extract_accounts(data)
+                accounts = self._lan_auth_extract_accounts(data)
             except Exception as exc:
-                log.warning("Failed to load auth accounts from '%s': %s", path, exc)
+                log.warning("Failed to load LAN auth accounts from '%s': %s", path, exc)
                 accounts = []
-            accounts, migrated = self._auth_secure_accounts(accounts)
-            self._auth_accounts_path = path
-            self._auth_accounts_mtime = mtime
-            self._auth_accounts_cache = accounts
-            log.info("Loaded auth accounts from '%s' (accounts=%d)", path, len(accounts))
+            accounts, migrated = self._lan_auth_secure_accounts(accounts)
+            self._lan_auth_accounts_path = path
+            self._lan_auth_accounts_mtime = mtime
+            self._lan_auth_accounts_cache = accounts
+            log.info("Loaded LAN auth accounts from '%s' (accounts=%d)", path, len(accounts))
             if migrated:
-                log.info("Migrating auth accounts to hashed password storage.")
-                self._save_auth_accounts(accounts)
-            return self._auth_accounts_cache
+                log.info("Migrating LAN auth accounts to hashed password storage.")
+                self._save_lan_auth_accounts(accounts)
+            return self._lan_auth_accounts_cache
 
-    def _save_auth_accounts(self, accounts: List[dict]) -> bool:
-        path = self._auth_accounts_file()
+    def _save_lan_auth_accounts(self, accounts: List[dict]) -> bool:
+        path = self._lan_auth_accounts_file()
         tmp_path = path + ".tmp"
         try:
             parent = os.path.dirname(path)
             if parent:
                 os.makedirs(parent, exist_ok=True)
             payload = {"users": [dict(account) for account in accounts if isinstance(account, dict)]}
-            with self._auth_accounts_lock:
+            with self._lan_auth_accounts_lock:
                 with open(tmp_path, "w", encoding="utf-8") as fh:
                     json.dump(payload, fh, indent=2, sort_keys=True)
                     fh.write("\n")
                 os.replace(tmp_path, path)
                 try:
-                    self._auth_accounts_mtime = os.path.getmtime(path)
+                    self._lan_auth_accounts_mtime = os.path.getmtime(path)
                 except OSError:
-                    self._auth_accounts_mtime = -1.0
-                self._auth_accounts_path = path
-                self._auth_accounts_cache = payload["users"]
-            log.info("Saved auth accounts to '%s' (accounts=%d)", path, len(accounts))
+                    self._lan_auth_accounts_mtime = -1.0
+                self._lan_auth_accounts_path = path
+                self._lan_auth_accounts_cache = payload["users"]
+            log.info("Saved LAN auth accounts to '%s' (accounts=%d)", path, len(accounts))
             return True
         except Exception as exc:
-            log.warning("Failed to save auth accounts to '%s': %s", path, exc)
+            log.warning("Failed to save LAN auth accounts to '%s': %s", path, exc)
             return False
 
-    def _append_auth_capture(self, kv: dict, identifier: str, password: str) -> None:
-        path = self._auth_capture_file()
+    def _append_lan_auth_capture(self, kv: dict, identifier: str, password: str) -> None:
+        path = self._lan_auth_capture_file()
         fields = {str(k).strip().upper(): str(v).strip() for k, v in (kv or {}).items()}
         for key in ("PASSWORD", "PASS", "PWORD", "PWD"):
             if key in fields:
@@ -1488,7 +818,7 @@ class GameServer:
             "identifier": identifier,
             "pass_len": len(str(password or "")),
             "pass_sha256": hashlib.sha256(pass_bytes).hexdigest(),
-            "pses": self._auth_kv_value(kv, "PSES"),
+            "pses": self._lan_auth_kv_value(kv, "PSES"),
             "keys": sorted(fields.keys()),
             "fields": fields,
         }
@@ -1499,19 +829,14 @@ class GameServer:
             with open(path, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, sort_keys=True) + "\n")
         except Exception as exc:
-            log.warning("Failed to append auth capture to '%s': %s", path, exc)
+            log.warning("Failed to append LAN auth capture to '%s': %s", path, exc)
 
-    def _auth_build_account(self, kv: dict, identifier: str, password: str) -> dict:
-        name = self._auth_kv_value(kv, "NAME", "USER", "USERNAME", "LOGIN") or identifier
-        email = self._auth_kv_value(kv, "EMAIL", "MAIL", "PMAIL", "U2_OLX_MAIL")
-        persona = self._auth_kv_value(kv, "PERS", "PERSO", "PERSONA") or name
+    def _lan_auth_build_account(self, kv: dict, identifier: str, password: str) -> dict:
+        name = self._lan_auth_kv_value(kv, "NAME", "USER", "USERNAME", "LOGIN") or identifier
+        email = self._lan_auth_kv_value(kv, "EMAIL", "MAIL", "PMAIL", "U2_OLX_MAIL")
+        persona = self._lan_auth_kv_value(kv, "PERS", "PERSO", "PERSONA") or name
         aliases: Set[str] = set()
-        for value in (
-            identifier,
-            email,
-            name,
-            self._auth_kv_value(kv, "USER", "USERNAME", "LOGIN"),
-        ):
+        for value in (identifier, email, name, self._lan_auth_kv_value(kv, "USER", "USERNAME", "LOGIN")):
             value = str(value or "").strip()
             if value:
                 aliases.add(value)
@@ -1524,39 +849,68 @@ class GameServer:
             "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         if password:
-            # Store every plausible stable form we can derive from the create-account
-            # packet.  U2 can send the password as a session/key encoded token; if we
-            # pick the wrong decoded form here, the account works only in the creation
-            # session and then fails with bad_password.  Verification already tries all
-            # candidates, so saving all candidate hashes is safer for this protocol.
-            candidates = []
-            seen_candidates = set()
-            for candidate in self._auth_password_candidates(kv, password):
-                candidate = str(candidate or "")
-                if candidate and candidate not in seen_candidates:
-                    seen_candidates.add(candidate)
-                    candidates.append(candidate)
-            if candidates:
-                # Store only fast wire hashes.  PBKDF2/large pass_wire_hashes made
-                # auth_accounts.json huge and caused slow reconnects when many
-                # wire-token candidates existed.
-                sha256s = [
-                    hashlib.sha256(candidate.encode("utf-8", errors="ignore")).hexdigest()
-                    for candidate in candidates
-                ]
-                account["pass_wire_sha256s"] = sha256s
+            candidates = self._lan_auth_password_candidates(kv, password)
+            sha256s: List[str] = []
+            seen = set()
+            for candidate in candidates:
+                digest = hashlib.sha256(str(candidate).encode("utf-8", errors="ignore")).hexdigest()
+                if digest not in seen:
+                    seen.add(digest)
+                    sha256s.append(digest)
+            account["pass_wire_sha256s"] = sha256s
         if email:
             account["email"] = email
         return account
 
-    def _auth_enroll_account(self, accounts: List[dict], kv: dict, identifier: str, password: str) -> Optional[dict]:
-        account = self._auth_build_account(kv, identifier, password)
-        if not self._save_auth_accounts([*accounts, account]):
+    def add_lan_account_persona(self, identifier: str, persona: str) -> bool:
+        persona = str(persona or "").strip()
+        identifier = str(identifier or "").strip()
+        if not persona:
+            return False
+        accounts = self._load_lan_auth_accounts()
+        if not accounts:
+            return False
+        ident_norm = self._lan_auth_norm(identifier)
+
+        selected = None
+        if ident_norm:
+            for account in accounts:
+                if ident_norm in self._lan_auth_account_identities(account):
+                    selected = account
+                    break
+        if selected is None and len(accounts) == 1:
+            selected = accounts[0]
+        if selected is None:
+            return False
+
+        personas = self._lan_auth_list(selected.get("personas"))
+        if not personas:
+            for key in ("persona", "pers", "display_name", "name"):
+                value = str(selected.get(key, "") or "").strip()
+                if value:
+                    personas.append(value)
+                    break
+        if persona.lower() not in {p.lower() for p in personas}:
+            personas.append(persona)
+            selected["personas"] = personas
+            if not selected.get("display_name"):
+                selected["display_name"] = personas[0]
+            if not selected.get("name"):
+                selected["name"] = personas[0]
+            ok = self._save_lan_auth_accounts(accounts)
+            if ok:
+                log.info("LAN auth persona added account=%s persona=%s", identifier or "-", persona)
+            return ok
+        return True
+
+    def _lan_auth_enroll_account(self, accounts: List[dict], kv: dict, identifier: str, password: str) -> Optional[dict]:
+        account = self._lan_auth_build_account(kv, identifier, password)
+        if not self._save_lan_auth_accounts([*accounts, account]):
             return None
         return account
 
-    def create_account(self, kv: dict) -> Tuple[bool, str, dict, str]:
-        identifier = self._auth_kv_value(
+    def create_lan_account(self, kv: dict) -> Tuple[bool, str, dict, str]:
+        identifier = self._lan_auth_kv_value(
             kv,
             "NAME",
             "USER",
@@ -1567,81 +921,81 @@ class GameServer:
             "PMAIL",
             "U2_OLX_MAIL",
         )
-        password = self._auth_kv_value(kv, "PASSWORD", "PASS", "PWORD", "PWD")
-        if not self.auth_allow_create_enabled():
+        password = self._lan_auth_kv_value(kv, "PASSWORD", "PASS", "PWORD", "PWD")
+        if not self.lan_auth_allow_create_enabled():
             return False, "create_disabled", {}, identifier
         if not identifier:
             return False, "missing_identifier", {}, ""
         if not password:
             return False, "missing_password", {}, identifier
 
-        accounts = self._load_auth_accounts()
-        new_account = self._auth_build_account(kv, identifier, password)
-        new_identities = self._auth_account_identities(new_account)
+        accounts = self._load_lan_auth_accounts()
+        new_account = self._lan_auth_build_account(kv, identifier, password)
+        new_identities = self._lan_auth_account_identities(new_account)
         for account in accounts:
-            if new_identities.intersection(self._auth_account_identities(account)):
+            if new_identities.intersection(self._lan_auth_account_identities(account)):
                 return False, "account_exists", dict(account), identifier
 
-        account = self._auth_enroll_account(accounts, kv, identifier, password)
+        account = self._lan_auth_enroll_account(accounts, kv, identifier, password)
         if not account:
             return False, "save_failed", {}, identifier
         return True, "created", dict(account), identifier
 
-    def _auth_rate_window(self) -> float:
+    def _lan_auth_rate_window(self) -> float:
         try:
-            return max(1.0, float(self.cfg.get("AUTH_FAIL_WINDOW", 60) or 60))
+            return max(1.0, float(self.cfg.get("LAN_AUTH_FAIL_WINDOW", 60) or 60))
         except Exception:
             return 60.0
 
-    def _auth_fail_limit(self) -> int:
+    def _lan_auth_fail_limit(self) -> int:
         try:
-            return max(1, int(self.cfg.get("AUTH_FAIL_LIMIT", 5) or 5))
+            return max(1, int(self.cfg.get("LAN_AUTH_FAIL_LIMIT", 5) or 5))
         except Exception:
             return 5
 
-    def _auth_lockout_seconds(self) -> float:
+    def _lan_auth_lockout_seconds(self) -> float:
         try:
-            return max(1.0, float(self.cfg.get("AUTH_LOCKOUT_SECONDS", 120) or 120))
+            return max(1.0, float(self.cfg.get("LAN_AUTH_LOCKOUT_SECONDS", 120) or 120))
         except Exception:
             return 120.0
 
-    def _auth_rate_key(self, identifier: str) -> str:
-        return self._auth_norm(identifier) or "-"
+    def _lan_auth_rate_key(self, identifier: str) -> str:
+        return self._lan_auth_norm(identifier) or "-"
 
-    def _auth_is_rate_limited(self, identifier: str) -> bool:
-        key = self._auth_rate_key(identifier)
+    def _lan_auth_is_rate_limited(self, identifier: str) -> bool:
+        key = self._lan_auth_rate_key(identifier)
         now = time.time()
-        window = max(self._auth_rate_window(), self._auth_lockout_seconds())
-        with self._auth_lock:
+        window = max(self._lan_auth_rate_window(), self._lan_auth_lockout_seconds())
+        with self._lan_auth_lock:
             failures = [
-                ts for ts in self._auth_failures.get(key, [])
+                ts for ts in self._lan_auth_failures.get(key, [])
                 if (now - float(ts)) <= window
             ]
-            self._auth_failures[key] = failures
-            if len(failures) < self._auth_fail_limit():
+            self._lan_auth_failures[key] = failures
+            if len(failures) < self._lan_auth_fail_limit():
                 return False
             newest = max(failures) if failures else 0.0
-            return (now - newest) <= self._auth_lockout_seconds()
+            return (now - newest) <= self._lan_auth_lockout_seconds()
 
-    def _auth_note_failure(self, identifier: str) -> None:
-        key = self._auth_rate_key(identifier)
+    def _lan_auth_note_failure(self, identifier: str) -> None:
+        key = self._lan_auth_rate_key(identifier)
         now = time.time()
-        window = max(self._auth_rate_window(), self._auth_lockout_seconds())
-        with self._auth_lock:
+        window = max(self._lan_auth_rate_window(), self._lan_auth_lockout_seconds())
+        with self._lan_auth_lock:
             failures = [
-                ts for ts in self._auth_failures.get(key, [])
+                ts for ts in self._lan_auth_failures.get(key, [])
                 if (now - float(ts)) <= window
             ]
             failures.append(now)
-            self._auth_failures[key] = failures[-max(self._auth_fail_limit() * 2, 16):]
+            self._lan_auth_failures[key] = failures[-max(self._lan_auth_fail_limit() * 2, 16):]
 
-    def _auth_note_success(self, identifier: str) -> None:
-        key = self._auth_rate_key(identifier)
-        with self._auth_lock:
-            self._auth_failures.pop(key, None)
+    def _lan_auth_note_success(self, identifier: str) -> None:
+        key = self._lan_auth_rate_key(identifier)
+        with self._lan_auth_lock:
+            self._lan_auth_failures.pop(key, None)
 
-    def authenticate_login(self, kv: dict) -> Tuple[bool, str, dict, str]:
-        identifier = self._auth_kv_value(
+    def authenticate_lan_login(self, kv: dict) -> Tuple[bool, str, dict, str]:
+        identifier = self._lan_auth_kv_value(
             kv,
             "EMAIL",
             "MAIL",
@@ -1652,95 +1006,67 @@ class GameServer:
             "LOGIN",
             "NAME",
         )
-        password = self._auth_kv_value(kv, "PASSWORD", "PASS", "PWORD", "PWD")
-        mode = self.auth_mode()
-        if self.auth_capture_enabled():
+        password = self._lan_auth_kv_value(kv, "PASSWORD", "PASS", "PWORD", "PWD")
+        mode = self.lan_auth_mode()
+        if self.lan_auth_capture_enabled():
             safe_keys = ",".join(sorted(str(key).strip().upper() for key in kv.keys()))
-            pses = self._auth_kv_value(kv, "PSES")
+            pses = self._lan_auth_kv_value(kv, "PSES")
             pass_digest = hashlib.sha256(password.encode("utf-8", errors="ignore")).hexdigest()[:12]
             log.warning(
-                "auth capture id=%r pass_len=%d pass_sha256=%s pses=%r keys=%s",
+                "LAN auth capture id=%r pass_len=%d pass_sha256=%s pses=%r keys=%s",
                 identifier,
                 len(password),
                 pass_digest,
                 pses,
                 safe_keys or "-",
             )
-            self._append_auth_capture(kv, identifier, password)
+            self._append_lan_auth_capture(kv, identifier, password)
 
-        forced_reason = self._auth_pop_forced_reject(kv, identifier)
-        if forced_reason:
-            log.warning("auth forced reject id=%r reason=%s", identifier, forced_reason)
-            return False, forced_reason, {}, identifier
-
-        if not self.auth_verify_enabled():
+        if not self.lan_auth_verify_enabled():
             return True, "disabled", {}, identifier
-
-        missing_fields = self._auth_missing_required_fields(kv)
-        if missing_fields:
-            log.warning("auth missing required fields id=%r fields=%s", identifier, ",".join(missing_fields))
-            return False, "missing_fields", {}, identifier
-        if self._cfg_flag("AUTH_REQUIRE_TOS") and not self._auth_bool(
-            self._auth_kv_value(kv, "TOS", "TERMS", "TERMS_ACCEPTED"),
-            False,
-        ):
-            return False, "tos_not_accepted", {}, identifier
-        if self._cfg_flag("AUTH_REQUIRE_SHARE") and not self._auth_bool(
-            self._auth_kv_value(kv, "SHARE", "SHARE_ACCEPTED"),
-            False,
-        ):
-            return False, "share_not_accepted", {}, identifier
 
         if not identifier:
             return False, "missing_identifier", {}, ""
-        if self._auth_is_rate_limited(identifier):
-            log.warning("auth rate limited id=%r", identifier)
+        if self._lan_auth_is_rate_limited(identifier):
+            log.warning("LAN auth rate limited id=%r", identifier)
             return False, "rate_limited", {}, identifier
         if mode != "account" and not password:
             return False, "missing_password", {}, identifier
 
-        accounts = self._load_auth_accounts()
+        accounts = self._load_lan_auth_accounts()
         if not accounts:
-            if self.auth_auto_enroll_enabled():
-                account = self._auth_enroll_account(accounts, kv, identifier, password)
+            if self.lan_auth_auto_enroll_enabled():
+                account = self._lan_auth_enroll_account(accounts, kv, identifier, password)
                 if account:
                     return True, "enrolled", dict(account), identifier
             return False, "no_accounts", {}, identifier
 
-        ident_norm = self._auth_norm(identifier)
+        ident_norm = self._lan_auth_norm(identifier)
         for account in accounts:
-            identities = self._auth_account_identities(account)
+            identities = self._lan_auth_account_identities(account)
             if ident_norm not in identities:
                 continue
-            reject_reason = self._auth_account_reject_reason(account)
-            if reject_reason:
-                self._auth_note_failure(identifier)
-                return False, reject_reason, {}, identifier
-            reject_reason = self._auth_account_key_reject_reason(account, kv)
-            if reject_reason:
-                self._auth_note_failure(identifier)
-                return False, reject_reason, {}, identifier
             if mode == "account":
-                self._auth_note_success(identifier)
+                self._lan_auth_note_success(identifier)
                 return True, "ok", dict(account), identifier
-            if self._auth_password_matches(account, kv, password):
-                self._auth_note_success(identifier)
+            if self._lan_auth_password_matches(account, kv, password):
+                self._lan_auth_note_success(identifier)
                 return True, "ok", dict(account), identifier
-            supplied_fp, expected_fps = self._auth_password_fingerprints(account, password)
+            supplied_fp, expected_fps = self._lan_auth_password_fingerprints(account, password)
             log.warning(
-                "auth password mismatch id=%r supplied=%s expected=%s",
+                "LAN auth password mismatch id=%r supplied=%s expected=%s",
                 identifier,
                 supplied_fp,
                 ";".join(expected_fps) or "-",
             )
-            self._auth_note_failure(identifier)
+            self._lan_auth_note_failure(identifier)
             return False, "bad_password", {}, identifier
-        if self.auth_auto_enroll_enabled():
-            account = self._auth_enroll_account(accounts, kv, identifier, password)
+        if self.lan_auth_auto_enroll_enabled():
+            account = self._lan_auth_enroll_account(accounts, kv, identifier, password)
             if account:
-                self._auth_note_success(identifier)
+                self._lan_auth_note_success(identifier)
                 return True, "enrolled", dict(account), identifier
-        self._auth_note_failure(identifier)
+        self._lan_auth_note_failure(identifier)
         return False, "unknown_account", {}, identifier
 
     def _csv_ports(self, *keys: str) -> List[int]:
@@ -1888,7 +1214,7 @@ class GameServer:
                 return host
             return self._runtime_local_host(conn)
         if service == "control":
-            host = self._first_host("CONTROL_PUBLIC_HOST", "CONTROL_ENDPOINT", "CONTROL_LISTEN_HOST", "CONTROL_LISTEN", "LOBBY_NEWS_HOST")
+            host = self._first_host("CONTROL_PUBLIC_HOST", "CONTROL_ENDPOINT", "CONTROL_LISTEN_HOST", "CONTROL_LISTEN", "LAN_NEWS_HOST")
             if host:
                 return host
             return self._public_host("lobby", conn=conn)
@@ -2291,13 +1617,13 @@ class GameServer:
                 self._admin_write(response)
 
     def _admin_find_handler(self, uid: int) -> Optional[ClientHandler]:
-        for handler in ClientHandler._snapshot_lobby_handlers():
+        for handler in ClientHandler._snapshot_lan_handlers():
             if int(getattr(handler.user, "uid", 0) or 0) == int(uid):
                 return handler
         return None
 
     def _admin_any_handler(self) -> Optional[ClientHandler]:
-        handlers = ClientHandler._snapshot_lobby_handlers()
+        handlers = ClientHandler._snapshot_lan_handlers()
         return handlers[0] if handlers else None
 
     def _admin_disconnect_socket(self, user: User, *, reason: str) -> None:
@@ -2420,34 +1746,14 @@ class GameServer:
         return "\n".join(lines) if lines else "no bans"
 
     def _admin_debug_status(self) -> str:
-        root = logging.getLogger()
-        level = logging.getLevelName(root.getEffectiveLevel())
-        handlers = []
-        for handler in root.handlers:
-            if not getattr(handler, "_u2online_managed", False):
-                continue
-            kind = str(getattr(handler, "_u2online_kind", "handler"))
-            handler_level = logging.getLevelName(handler.level)
-            if kind == "file":
-                filename = getattr(handler, "baseFilename", "")
-                handlers.append(f"file={handler_level}:{filename}")
-            else:
-                handlers.append(f"{kind}={handler_level}")
-        handler_text = " ".join(handlers) if handlers else "handlers=external"
-        return f"debug level={level} {handler_text} udpdebug={'on' if self._udp_relay_verbose else 'off'}"
+        level = logging.getLogger().getEffectiveLevel()
+        name = logging.getLevelName(level)
+        return f"debug level={name} udpdebug={'on' if self._udp_relay_verbose else 'off'}"
 
     def _admin_set_debug(self, enabled: bool) -> str:
-        if not enabled:
-            configure_logging_from_config(self.cfg, self._config_path)
-            return self._admin_debug_status()
-
-        level = logging.DEBUG
-        root = logging.getLogger()
-        root.setLevel(level)
-        for handler in root.handlers:
-            if getattr(handler, "_u2online_managed", False):
-                handler.setLevel(level)
-        for logger_name in ("server", "client", "rooms", "users", "ranking", "master", "config", "control", "batch", "matchmaking"):
+        level = logging.DEBUG if enabled else logging.INFO
+        logging.getLogger().setLevel(level)
+        for logger_name in ("server", "client", "rooms", "users", "ranking", "master", "config"):
             logging.getLogger(logger_name).setLevel(level)
         return self._admin_debug_status()
 
@@ -2471,7 +1777,7 @@ class GameServer:
             game_after, removed = self.games.leave(int(game.id), int(uid))
             helper = self._admin_any_handler()
             if helper is not None:
-                helper._lobby_on_game_departure(game or game_after, departed_uid=int(uid), removed=removed)
+                helper._lan_on_game_departure(game or game_after, departed_uid=int(uid), removed=removed)
         if int(user.room or 0):
             self.rooms.leave(int(user.room), int(uid))
         self.users.remove(int(uid))
@@ -2495,11 +1801,11 @@ class GameServer:
             user.stat = STAT_ROOM if int(user.room or 0) else STAT_LOBBY
 
         if handler is not None and game_ref is not None:
-            handler._lobby_emit_game_leave_reset(handler, game_ref, delay_s=0.01, self_leave=False)
+            handler._lan_emit_game_leave_reset(handler, game_ref, delay_s=0.01, self_leave=False)
 
         helper = handler or self._admin_any_handler()
         if helper is not None and game_ref is not None:
-            helper._lobby_on_game_departure(game_ref, departed_uid=int(uid), removed=removed)
+            helper._lan_on_game_departure(game_ref, departed_uid=int(uid), removed=removed)
 
         self.request_master_stat_refresh()
         if removed:
@@ -2531,7 +1837,7 @@ class GameServer:
 
         helper = self._admin_any_handler()
         if helper is not None:
-            helper._lobby_on_game_departure(removed_game, departed_uid=0, removed=True)
+            helper._lan_on_game_departure(removed_game, departed_uid=0, removed=True)
 
         self.request_master_stat_refresh()
         return f"closed game {game_id}"
@@ -2541,7 +1847,7 @@ class GameServer:
             return False
         handler = self._admin_find_handler(int(user.uid))
         if handler is not None:
-            fields = handler._lobby_msg_fields(
+            fields = handler._lan_msg_fields(
                 text,
                 sender="Server",
                 flag="P" if private else "",
@@ -2563,11 +1869,11 @@ class GameServer:
 
     def _admin_push_news(self) -> str:
         delivered = 0
-        for handler in ClientHandler._snapshot_lobby_handlers():
+        for handler in ClientHandler._snapshot_lan_handlers():
             if not bool(getattr(handler.user, "connected", False)):
                 continue
             try:
-                handler._send_later_bytes(0.01, handler._lobby_news_burst(), label="admin-pushnews")
+                handler._send_later_bytes(0.01, handler._lan_news_burst(), label="admin-pushnews")
                 delivered += 1
             except Exception as exc:
                 log.warning(
@@ -2685,10 +1991,9 @@ class GameServer:
         self.cfg._data = dict(DEFAULTS)
         if not self.cfg.load(self._config_path):
             return f"failed to reload config from {self._config_path}"
-        configure_logging_from_config(self.cfg, self._config_path)
 
         # Apply safe runtime tunables only. Listener host/port changes still need restart.
-        self.users.max_users = int(self.cfg.get("SERVER_MAX_PLAYERS", self.cfg.get("USERS", self.users.max_users)) or self.users.max_users)
+        self.users.max_users = int(self.cfg.get("USERS", self.users.max_users))
         self.rooms.max_rooms = int(self.cfg.get("ROOMS", self.rooms.max_rooms))
         self.rooms.max_size = int(self.cfg.get("ROOMMAX", self.rooms.max_size))
         self.games.max_games = int(self.cfg.get("GAMES", self.games.max_games))
@@ -2706,10 +2011,10 @@ class GameServer:
         self.stats.stat_refresh = int(self.cfg.get("SERVER_STAT_REFRESH", self.stats.stat_refresh))
         self._udp_relay_verbose = self._cfg_flag("UDP_RELAY_VERBOSE", "UDP_DEBUG")
         self._sync_udp_relay_verbose_filter()
-        with self._auth_accounts_lock:
-            self._auth_accounts_path = ""
-            self._auth_accounts_mtime = -1.0
-            self._auth_accounts_cache = []
+        with self._lan_auth_accounts_lock:
+            self._lan_auth_accounts_path = ""
+            self._lan_auth_accounts_mtime = -1.0
+            self._lan_auth_accounts_cache = []
         self.request_master_stat_refresh()
         self._load_admin_bans()
         self.messenger.load_social_relations()
@@ -2808,79 +2113,6 @@ class GameServer:
         ]
         return "\n".join(lines)
 
-    @staticmethod
-    def _parse_admin_stat_category(raw: str = "all") -> tuple[int, str] | None:
-        value = str(raw or "all").strip().lower()
-        aliases = {
-            "all": (0, "all"),
-            "overall": (0, "all"),
-            "circuit": (1, "circuit"),
-            "circ": (1, "circuit"),
-            "sprint": (2, "sprint"),
-            "drag": (3, "drag"),
-            "drift": (4, "drift"),
-            "url": (4, "drift"),
-        }
-        if value in aliases:
-            return aliases[value]
-        if value.isdigit():
-            idx = int(value)
-            if 0 <= idx <= 4:
-                names = ("all", "circuit", "sprint", "drag", "drift")
-                return idx, names[idx]
-        return None
-
-    def _admin_stat_bump(self, persona: str, outcome: str, category: str = "all", count: int = 1) -> str:
-        persona = str(persona or "").strip()
-        if not persona:
-            return "usage: statbump <persona> <win|loss|disconnect> [all|circuit|sprint|drag|drift|url] [count]"
-        outcome_key = str(outcome or "").strip().lower()
-        outcome_map = {
-            "w": "WIN",
-            "win": "WIN",
-            "wins": "WIN",
-            "l": "LOSS",
-            "loss": "LOSS",
-            "losses": "LOSS",
-            "d": "DISCONNECT",
-            "disc": "DISCONNECT",
-            "disconnect": "DISCONNECT",
-            "disconnects": "DISCONNECT",
-        }
-        mapped = outcome_map.get(outcome_key)
-        parsed_category = self._parse_admin_stat_category(category)
-        if mapped is None or parsed_category is None or count < 1:
-            return "usage: statbump <persona> <win|loss|disconnect> [all|circuit|sprint|drag|drift|url] [count]"
-        category_index, category_name = parsed_category
-        for _ in range(min(1000, int(count))):
-            self.stats.record_player_result(persona, mapped, category_index=category_index)
-        self.stats.save(force=True)
-        summary = self.stats.player_summary(persona)
-        return (
-            f"stats bumped persona={persona} outcome={mapped.lower()} category={category_name} count={count} "
-            f"rank={int(summary.get('rank', 9999) or 9999)} "
-            f"wins={int(summary.get('wins', 0) or 0)} "
-            f"losses={int(summary.get('losses', 0) or 0)} "
-            f"disconnects={int(summary.get('disconnects', 0) or 0)} "
-            f"rep={int(summary.get('rep', 100) or 100)}"
-        )
-
-    def _admin_stat_show(self, persona: str) -> str:
-        persona = str(persona or "").strip()
-        if not persona:
-            return "usage: statshow <persona>"
-        summary = self.stats.player_summary(persona)
-        csv = self.stats.player_stat_csv(persona)
-        return (
-            f"persona={persona} "
-            f"rank={int(summary.get('rank', 9999) or 9999)} "
-            f"wins={int(summary.get('wins', 0) or 0)} "
-            f"losses={int(summary.get('losses', 0) or 0)} "
-            f"disconnects={int(summary.get('disconnects', 0) or 0)} "
-            f"rep={int(summary.get('rep', 100) or 100)}\n"
-            f"S={csv}"
-        )
-
     def _run_admin_command(self, line: str) -> str:
         try:
             argv = shlex.split(line)
@@ -2899,18 +2131,11 @@ class GameServer:
                     "rooms",
                     "games",
                     "stats",
-                    "statshow <persona>",
-                    "statbump <persona> <win|loss|disconnect> [all|circuit|sprint|drag|drift|url] [count]",
                     "social [name]",
                     "kick <uid>",
                     "ban <uid>",
                     "unban <token>",
                     "listbans",
-                    "authcode <code> [identifier|*] [uses]",
-                    "authcode list|clear|codes",
-                    "personacode <code> [persona|*] [uses]",
-                    "personacode list|clear|codes",
-                    "authreject [repeat interval close_delay]|slow|default",
                     "mute <uid> [reason]",
                     "unmute <uid>",
                     "mutename <name> [reason]",
@@ -2941,20 +2166,6 @@ class GameServer:
             return self._format_admin_games()
         if cmd == "stats":
             return self._format_admin_stats()
-        if cmd == "statshow":
-            if len(argv) != 2:
-                return "usage: statshow <persona>"
-            return self._admin_stat_show(argv[1])
-        if cmd == "statbump":
-            if len(argv) < 3 or len(argv) > 5:
-                return "usage: statbump <persona> <win|loss|disconnect> [all|circuit|sprint|drag|drift|url] [count]"
-            category = argv[3] if len(argv) >= 4 else "all"
-            count = 1
-            if len(argv) >= 5:
-                if not argv[4].isdigit():
-                    return "usage: statbump <persona> <win|loss|disconnect> [all|circuit|sprint|drag|drift|url] [count]"
-                count = int(argv[4])
-            return self._admin_stat_bump(argv[1], argv[2], category, count)
         if cmd == "social":
             if len(argv) > 2:
                 return "usage: social [name]"
@@ -2973,54 +2184,6 @@ class GameServer:
             return self._admin_unban(argv[1])
         if cmd == "listbans":
             return self._format_admin_bans()
-        if cmd == "authcode":
-            if len(argv) < 2:
-                return "usage: authcode <code> [identifier|*] [uses] | authcode list|clear|codes"
-            subcmd = argv[1].lower()
-            if subcmd == "list":
-                return self._format_auth_forced_rejects()
-            if subcmd == "clear":
-                return self._clear_auth_forced_rejects()
-            if subcmd == "codes":
-                return self._auth_supported_codes_text()
-            identifier = argv[2] if len(argv) >= 3 else "*"
-            uses = 1
-            if len(argv) >= 4:
-                if not argv[3].isdigit():
-                    return "usage: authcode <code> [identifier|*] [uses]"
-                uses = int(argv[3])
-            if len(argv) > 4:
-                return "usage: authcode <code> [identifier|*] [uses]"
-            return self._auth_set_forced_reject(argv[1], identifier, uses)
-        if cmd == "authreject":
-            if len(argv) == 1 or (len(argv) == 2 and argv[1].lower() == "status"):
-                return self._format_auth_reject_timing()
-            if len(argv) == 2 and argv[1].lower() == "slow":
-                return self._set_auth_reject_timing(1, 0.25, 8.0)
-            if len(argv) == 2 and argv[1].lower() == "default":
-                return self._set_auth_reject_timing(4, 0.25, 1.10)
-            if len(argv) != 4:
-                return "usage: authreject <repeat> <interval_sec> <close_delay_sec> | authreject slow|default|status"
-            return self._set_auth_reject_timing(argv[1], argv[2], argv[3])
-        if cmd == "personacode":
-            if len(argv) < 2:
-                return "usage: personacode <code> [persona|*] [uses] | personacode list|clear|codes"
-            subcmd = argv[1].lower()
-            if subcmd == "list":
-                return self._format_persona_forced_rejects()
-            if subcmd == "clear":
-                return self._clear_persona_forced_rejects()
-            if subcmd == "codes":
-                return self._persona_supported_codes_text()
-            persona = argv[2] if len(argv) >= 3 else "*"
-            uses = 1
-            if len(argv) >= 4:
-                if not argv[3].isdigit():
-                    return "usage: personacode <code> [persona|*] [uses]"
-                uses = int(argv[3])
-            if len(argv) > 4:
-                return "usage: personacode <code> [persona|*] [uses]"
-            return self._persona_set_forced_reject(argv[1], persona, uses)
         if cmd == "mute":
             if len(argv) < 2 or not argv[1].isdigit():
                 return "usage: mute <uid> [reason]"
@@ -3110,17 +2273,6 @@ class GameServer:
             except OSError:
                 break
 
-            if not self._accepts_new_connection(addr[0]):
-                try:
-                    conn.shutdown(socket.SHUT_RDWR)
-                except Exception:
-                    pass
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-                continue
-
             if self._admin_is_ip_banned(addr[0]):
                 log.info("Admin ban refused lobby connection from %s:%d", addr[0], addr[1])
                 try:
@@ -3129,27 +2281,9 @@ class GameServer:
                     pass
                 continue
 
-            if not self._open_lobby_connection_slot(addr[0]):
-                try:
-                    conn.shutdown(socket.SHUT_RDWR)
-                except Exception:
-                    pass
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-                continue
-
             user    = User(conn, addr)
             handler = ClientHandler(self, user)
-
-            def _run_handler() -> None:
-                try:
-                    handler.run()
-                finally:
-                    self._close_lobby_connection_slot()
-
-            t = threading.Thread(target=_run_handler,
+            t = threading.Thread(target=handler.run,
                                  name=f"{thread_prefix}-{addr[0]}",
                                  daemon=True)
             t.start()
@@ -3305,33 +2439,9 @@ class GameServer:
         if not mapping:
             self._udp_relay_uid_addr_by_room.pop(room_id, None)
 
-    def _udp_relay_max_clients(self) -> int:
-        return self._cfg_int("UDP_RELAY_MAX_CLIENTS", 128, min_value=0, max_value=100000)
-
-    def _udp_relay_max_pending_rooms(self) -> int:
-        return self._cfg_int("UDP_RELAY_MAX_PENDING_ROOMS", 128, min_value=0, max_value=100000)
-
-    def _udp_relay_pending_room_ttl(self) -> float:
-        return self._cfg_float("UDP_RELAY_PENDING_ROOM_TTL", 60.0, min_value=5.0, max_value=3600.0)
-
-    def _udp_relay_touch_client(self, addr: Addr, relay_listen_port: int = 0) -> Optional[UDPRelayClientState]:
+    def _udp_relay_touch_client(self, addr: Addr, relay_listen_port: int = 0) -> UDPRelayClientState:
         state = self._udp_relay_clients.get(addr)
         if state is None:
-            max_clients = self._udp_relay_max_clients()
-            if max_clients > 0 and len(self._udp_relay_clients) >= max_clients:
-                self._udp_relay_cleanup_idle()
-            if max_clients > 0 and len(self._udp_relay_clients) >= max_clients:
-                now = time.time()
-                if now >= self._udp_relay_limit_log_at:
-                    log.warning(
-                        "UDP relay client limit reached: src=%s:%d active=%d max=%d",
-                        addr[0],
-                        addr[1],
-                        len(self._udp_relay_clients),
-                        max_clients,
-                    )
-                    self._udp_relay_limit_log_at = now + 5.0
-                return None
             state = UDPRelayClientState(addr=addr)
             self._udp_relay_clients[addr] = state
         state.last_seen = time.time()
@@ -3342,50 +2452,6 @@ class GameServer:
 
     def _udp_relay_idle_timeout(self) -> float:
         return max(30.0, float(self.cfg.get("GAME_EXPIRE_TIME", 300) or 300))
-
-    def _udp_relay_cleanup_pending_rooms(self) -> None:
-        cutoff = time.time() - self._udp_relay_pending_room_ttl()
-        for store, seen in (
-            (self._udp_relay_pending_room_packets, self._udp_relay_pending_room_seen),
-            (self._udp_relay_pending_room_raw_packets, self._udp_relay_pending_room_raw_seen),
-        ):
-            stale = [room for room, at in seen.items() if float(at or 0.0) < cutoff]
-            for room in stale:
-                store.pop(room, None)
-                seen.pop(room, None)
-            max_rooms = self._udp_relay_max_pending_rooms()
-            if max_rooms > 0 and len(store) > max_rooms:
-                overflow = sorted(store, key=lambda room: float(seen.get(room, 0.0) or 0.0))
-                for room in overflow[: len(store) - max_rooms]:
-                    store.pop(room, None)
-                    seen.pop(room, None)
-
-    def _udp_relay_pending_list(
-        self,
-        store: Dict[int, List[Tuple[Addr, bytes]]],
-        seen: Dict[int, float],
-        room: int,
-    ) -> Optional[List[Tuple[Addr, bytes]]]:
-        room_id = int(room or 0)
-        if room_id <= 0 or room_id == 0xFFFFFFFF:
-            return None
-        if room_id not in store:
-            self._udp_relay_cleanup_pending_rooms()
-            max_rooms = self._udp_relay_max_pending_rooms()
-            if max_rooms > 0 and len(store) >= max_rooms:
-                now = time.time()
-                if now >= self._udp_relay_limit_log_at:
-                    log.warning(
-                        "UDP relay pending-room limit reached: room=0x%08X active=%d max=%d",
-                        room_id,
-                        len(store),
-                        max_rooms,
-                    )
-                    self._udp_relay_limit_log_at = now + 5.0
-                return None
-            store[room_id] = []
-        seen[room_id] = time.time()
-        return store[room_id]
 
     def _udp_relay_wrapped_target_is_plausible(self, target: Addr) -> bool:
         if target in self._udp_relay_clients:
@@ -3780,8 +2846,6 @@ class GameServer:
                     self._udp_relay_rooms.pop(state.room, None)
                     self._udp_relay_pending_room_packets.pop(state.room, None)
                     self._udp_relay_pending_room_raw_packets.pop(state.room, None)
-                    self._udp_relay_pending_room_seen.pop(state.room, None)
-                    self._udp_relay_pending_room_raw_seen.pop(state.room, None)
                     self._udp_relay_raw_started_rooms.discard(state.room)
                     self._udp_relay_host_bootstrap_sent = {
                         item for item in self._udp_relay_host_bootstrap_sent if item[0] != state.room
@@ -3835,8 +2899,6 @@ class GameServer:
 
         self._udp_relay_pending_room_packets.pop(room_id, None)
         self._udp_relay_pending_room_raw_packets.pop(room_id, None)
-        self._udp_relay_pending_room_seen.pop(room_id, None)
-        self._udp_relay_pending_room_raw_seen.pop(room_id, None)
         self._udp_relay_raw_started_rooms.discard(room_id)
         self._udp_relay_host_bootstrap_sent = {
             item for item in self._udp_relay_host_bootstrap_sent if item[0] != room_id
@@ -3864,7 +2926,6 @@ class GameServer:
         stale = [addr for addr, state in self._udp_relay_clients.items() if state.last_seen < cutoff]
         for addr in stale:
             self._udp_relay_drop_client(addr)
-        self._udp_relay_cleanup_pending_rooms()
 
     def _udp_relay_room_last_seen(self, room: int) -> float:
         room_id = int(room or 0)
@@ -3881,7 +2942,7 @@ class GameServer:
     def _cleanup_detached_race_users(self) -> None:
         now = time.time()
         grace = max(5.0, float(self.cfg.get("RACE_DETACHED_GRACE", 8.0) or 8.0))
-        detached_grace = max(grace, float(self.cfg.get("LOBBY_DETACHED_GRACE", 20.0) or 20.0))
+        detached_grace = max(grace, float(self.cfg.get("LAN_DETACHED_GRACE", 20.0) or 20.0))
         active_grace_default = max(grace, min(30.0, self._udp_relay_idle_timeout()))
         active_grace = max(
             grace,
@@ -3911,7 +2972,7 @@ class GameServer:
                 self.request_master_stat_refresh()
                 helper = self._admin_any_handler()
                 if helper is not None:
-                    helper._lobby_on_game_departure(game or game_after, departed_uid=int(user.uid), removed=removed)
+                    helper._lan_on_game_departure(game or game_after, departed_uid=int(user.uid), removed=removed)
                 elif game_after is None:
                     self.udp_relay_reset_room(game_id)
                 log.info(
@@ -3934,7 +2995,7 @@ class GameServer:
             self.request_master_stat_refresh()
             helper = self._admin_any_handler()
             if helper is not None:
-                helper._lobby_on_game_departure(game or game_after, departed_uid=int(user.uid), removed=removed)
+                helper._lan_on_game_departure(game or game_after, departed_uid=int(user.uid), removed=removed)
             else:
                 self.udp_relay_reset_room(game_id)
             log.info(
@@ -4119,7 +3180,7 @@ class GameServer:
             return {}
         return {addr: str(hosts[idx]) for idx, addr in enumerate(sorted_members)}
 
-    def _udp_relay_room_lobby_endpoints(self, room: Optional[int]) -> List[UDPRelayRoomEndpoint]:
+    def _udp_relay_room_lan_endpoints(self, room: Optional[int]) -> List[UDPRelayRoomEndpoint]:
         room_id = int(room or 0)
         if room_id <= 0:
             return []
@@ -4150,7 +3211,7 @@ class GameServer:
                 or ""
             ).strip() or "127.0.0.1"
             match_addr = raw_addr
-            alias_loopback = bool(int(self.cfg.get("RACE_LOOPBACK_ALIAS_PEERS", 0) or 0))
+            alias_loopback = bool(int(self.cfg.get("LAN_LOOPBACK_ALIAS_PEERS", 0) or 0))
             # Same-host UDP is now separated by real local ports on the client
             # side. Only synthesize fake peer IPs when explicitly requested, or
             # when the virtual-peer mode is active.
@@ -4188,6 +3249,9 @@ class GameServer:
             endpoint.presented_ip = str(hosts[idx])
         return endpoints
 
+    def _udp_relay_room_lan_addrs(self, room: Optional[int]) -> List[str]:
+        return [endpoint.presented_ip for endpoint in self._udp_relay_room_lan_endpoints(room)]
+
     def _udp_relay_update_spoof_ip(
         self,
         sender: UDPRelayClientState,
@@ -4223,7 +3287,7 @@ class GameServer:
                         target[1],
                     )
                 return
-        room_endpoints = self._udp_relay_room_lobby_endpoints(room)
+        room_endpoints = self._udp_relay_room_lan_endpoints(room)
         if len(room_endpoints) != 2:
             return
         target_ip = str(target[0] or "").strip()
@@ -4349,7 +3413,7 @@ class GameServer:
         )
 
     @staticmethod
-    def _lobby_aux_fields(aux_text: str) -> Dict[str, str]:
+    def _lan_aux_fields(aux_text: str) -> Dict[str, str]:
         text = str(aux_text or "").strip()
         if not text:
             return {}
@@ -4369,8 +3433,8 @@ class GameServer:
         return out
 
     @staticmethod
-    def _udp_relay_lobby_aux_bootstrap_packets(aux_text: str) -> List[bytes]:
-        fields = GameServer._lobby_aux_fields(aux_text)
+    def _udp_relay_lan_aux_bootstrap_packets(aux_text: str) -> List[bytes]:
+        fields = GameServer._lan_aux_fields(aux_text)
         car_state = fields.get("C", "")
         if not car_state.startswith("281DC"):
             return []
@@ -4418,13 +3482,13 @@ class GameServer:
         host_user = self.users.get(host_uid)
         if host_user is None:
             return []
-        return self._udp_relay_lobby_aux_bootstrap_packets(str(getattr(host_user, "aux", "") or ""))
+        return self._udp_relay_lan_aux_bootstrap_packets(str(getattr(host_user, "aux", "") or ""))
 
     def _udp_relay_user_aux_bootstrap_packets(self, uid: int) -> List[bytes]:
         user = self.users.get(int(uid or 0))
         if user is None:
             return []
-        return self._udp_relay_lobby_aux_bootstrap_packets(str(getattr(user, "aux", "") or ""))
+        return self._udp_relay_lan_aux_bootstrap_packets(str(getattr(user, "aux", "") or ""))
 
     def _udp_relay_inject_missing_65_from_sender(
         self,
@@ -4546,7 +3610,7 @@ class GameServer:
         )
 
     def _udp_relay_host_continuation_packets(self) -> List[bytes]:
-        # Small host-side continuation observed in a working two-client local
+        # Small host-side continuation observed in a working two-client LAN
         # capture. The same-PC forced-port path can miss the real host SendSocket
         # emission, so only inject this once after the peer reaches the 0x6A
         # bootstrap phase.
@@ -4627,7 +3691,7 @@ class GameServer:
         if sender.control_prime_count >= 3 and (now - sender.control_prime_last) < 0.75:
             return False
 
-        endpoints = self._udp_relay_room_lobby_endpoints(room)
+        endpoints = self._udp_relay_room_lan_endpoints(room)
         if len(endpoints) < 2:
             return False
 
@@ -4999,7 +4063,6 @@ class GameServer:
 
     def _udp_relay_replay_pending_room_packets(self, room: int, dst: Addr) -> None:
         pending = self._udp_relay_pending_room_packets.pop(room, [])
-        self._udp_relay_pending_room_seen.pop(room, None)
         for src, payload in pending:
             cmd = _udp_read_u32_le(payload, 0) if len(payload) >= 4 else 0
             wrapped_src = self._udp_relay_wrapped_src(
@@ -5101,10 +4164,8 @@ class GameServer:
             replayed += 1
         if keep:
             self._udp_relay_pending_room_raw_packets[room] = keep
-            self._udp_relay_pending_room_raw_seen[room] = time.time()
         else:
             self._udp_relay_pending_room_raw_packets.pop(room, None)
-            self._udp_relay_pending_room_raw_seen.pop(room, None)
         if replayed:
             log.info(
                 "UDP relay replayed(raw pending batch): room=0x%08X dst=%s:%d count=%d",
@@ -5170,8 +4231,6 @@ class GameServer:
 
     def _udp_relay_handle_datagram(self, data: bytes, src: Addr, relay_listen_port: int = 0) -> None:
         sender = self._udp_relay_touch_client(src, relay_listen_port)
-        if sender is None:
-            return
         decoded = _udp_maybe_decode_wrapped(data)
         payload = data
         target: Optional[Addr] = None
@@ -5335,7 +4394,6 @@ class GameServer:
             room_members = self._udp_relay_rooms.get(room, set())
             if len(room_members) > 1 and room in self._udp_relay_pending_room_packets:
                 pending = self._udp_relay_pending_room_packets.pop(room, [])
-                self._udp_relay_pending_room_seen.pop(room, None)
                 for pending_src, pending_payload in pending:
                     if pending_src not in self._udp_relay_clients:
                         continue
@@ -5660,7 +4718,7 @@ class GameServer:
                             continue
                         # In the same-PC two-client path the host instance is
                         # pinned to the lower forced port. If it never emits
-                        # the large 0x65..0x69 race init block, inject it from
+                        # the large 0x65..0x69 LAN init block, inject it from
                         # the host's aux/car-state payload so the peer can
                         # leave the pre-race bootstrap loop.
                         self._udp_relay_inject_host_aux_bootstrap(int(sender.room), dst, src)
@@ -5895,15 +4953,9 @@ class GameServer:
                     # room one side at a time after post-race reset, and if we
                     # drop the early cmd=1/cmd=5 packets there is nothing left
                     # to replay once the peer finally appears.
-                    room_pending = self._udp_relay_pending_list(
-                        self._udp_relay_pending_room_packets,
-                        self._udp_relay_pending_room_seen,
-                        int(room),
-                    )
-                    already_saved = bool(room_pending) and any(
-                        pending_src == src and pending_payload == payload for pending_src, pending_payload in room_pending
-                    )
-                    if room_pending is not None and not already_saved and len(room_pending) < 8:
+                    room_pending = self._udp_relay_pending_room_packets.setdefault(room, [])
+                    already_saved = any(pending_src == src and pending_payload == payload for pending_src, pending_payload in room_pending)
+                    if not already_saved and len(room_pending) < 8:
                         room_pending.append((src, payload))
                         log.info(
                             "UDP room pending(saved): src=%s:%d cmd=%d room=0x%08X count=%d",
@@ -5922,15 +4974,9 @@ class GameServer:
                             room,
                         )
                 elif rawish_packet:
-                    room_raw = self._udp_relay_pending_list(
-                        self._udp_relay_pending_room_raw_packets,
-                        self._udp_relay_pending_room_raw_seen,
-                        int(room),
-                    )
-                    already_saved = bool(room_raw) and any(
-                        pending_src == src and pending_payload == payload for pending_src, pending_payload in room_raw
-                    )
-                    if room_raw is not None and not already_saved and len(room_raw) < 64:
+                    room_raw = self._udp_relay_pending_room_raw_packets.setdefault(int(room), [])
+                    already_saved = any(pending_src == src and pending_payload == payload for pending_src, pending_payload in room_raw)
+                    if not already_saved and len(room_raw) < 64:
                         room_raw.append((src, payload))
                         log.info(
                             "UDP room pending(raw saved): src=%s:%d len=%d w0=0x%08X room=0x%08X wrapped=%s target=%s:%s count=%d",
@@ -5942,7 +4988,7 @@ class GameServer:
                             wrapped_in,
                             target[0] if target is not None else "-",
                             target[1] if target is not None else "-",
-                            len(room_raw or []),
+                            len(room_raw),
                         )
                     else:
                         log.info(
@@ -5955,7 +5001,7 @@ class GameServer:
                             wrapped_in,
                             target[0] if target is not None else "-",
                             target[1] if target is not None else "-",
-                            len(room_raw or []),
+                            len(room_raw),
                         )
                 else:
                     log.info(
@@ -5967,12 +5013,8 @@ class GameServer:
                     )
             elif sender.room is not None:
                 first_word = _udp_read_u32_le(payload, 0) if len(payload) >= 4 else 0
-                room_raw = self._udp_relay_pending_list(
-                    self._udp_relay_pending_room_raw_packets,
-                    self._udp_relay_pending_room_raw_seen,
-                    int(sender.room),
-                )
-                if room_raw is not None and len(room_raw) < 64:
+                room_raw = self._udp_relay_pending_room_raw_packets.setdefault(sender.room, [])
+                if len(room_raw) < 64:
                     room_raw.append((src, payload))
                     log.info(
                         "UDP relay pending(raw saved): src=%s:%d len=%d w0=0x%08X sender_room=0x%08X wrapped=%s target=%s:%s count=%d",
@@ -5984,7 +5026,7 @@ class GameServer:
                         wrapped_in,
                         target[0] if target is not None else "-",
                         target[1] if target is not None else "-",
-                        len(room_raw or []),
+                        len(room_raw),
                     )
                 else:
                     log.info(
@@ -5997,7 +5039,7 @@ class GameServer:
                         wrapped_in,
                         target[0] if target is not None else "-",
                         target[1] if target is not None else "-",
-                        len(room_raw or []),
+                        len(room_raw),
                     )
                 log.info(
                     "UDP relay drop(raw no-recipient): src=%s:%d len=%d w0=0x%08X sender_room=0x%08X wrapped=%s target=%s:%s",
@@ -6425,7 +5467,7 @@ class GameServer:
                 # Clean up users detached from active race TCP once UDP has
                 # gone quiet for a short grace window.
                 self._cleanup_detached_race_users()
-                self.sweep_lobby_dir_challenges()
+                self.sweep_lan_dir_challenges()
 
                 # Sweep expired games
                 self.games.sweep_expired()

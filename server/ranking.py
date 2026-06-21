@@ -6,18 +6,12 @@ Matches DLL: RANK_*, STAT_*, PlayModuleRanker, PlayModuleRanklist
 import os
 import time
 import json
+import hashlib
 import threading
 import logging
 from typing import Dict, List, Optional, Any, Iterable
 
 log = logging.getLogger("ranking")
-
-
-def _limit_value(value: Any, default: int) -> int:
-    try:
-        return max(0, int(value))
-    except (TypeError, ValueError):
-        return max(0, int(default))
 
 
 NFSU2_STAT_CATEGORIES = ("all", "circuit", "sprint", "drag", "drift")
@@ -90,9 +84,6 @@ class NFSU2PlayerStats:
     def snap_hex_csv(self, index: int, rank: int) -> str:
         category_index = max(0, min(4, int(index) - 1))
         values = self.category(category_index)
-        # For non-overall boards the client reads the category values from the
-        # same offset as the full 5x7 stats block, so keep leading empty slots.
-        prefix = [""] * (category_index * NFSU2_CATEGORY_SIZE)
         # nfsuserver sends the visible list rank in the category's rating slot.
         row = [
             max(1, int(rank)),
@@ -103,8 +94,8 @@ class NFSU2PlayerStats:
             values[5],  # average opponent rep
             values[6],  # average opponent rating
         ]
-        encoded = [f"{max(0, int(value)):x}" for value in row]
-        return ",".join(prefix + encoded)
+        prefix = [""] * (category_index * NFSU2_CATEGORY_SIZE)
+        return ",".join(prefix + [f"{max(0, int(value)):x}" for value in row])
 
 
 # ======================================================================= #
@@ -165,7 +156,7 @@ class RankingSystem:
         self._last_save = time.time()
 
         self.rank_file      = cfg.get("RANKFILE", "data/rankings.dat")
-        self.rank_lim       = _limit_value(cfg.get("RANKLIM", 10000), 10000)
+        self.rank_lim       = cfg.get("RANKLIM", 10000)
         self.save_interval  = cfg.get("RANK_SAVE_TIME", 600)
         self.min_game_time  = cfg.get("RANK_MINIMUM_TIME", 60)
         self.do_evaluate    = bool(cfg.get("RANK_EVALUATE_GAME", 1))
@@ -183,16 +174,10 @@ class RankingSystem:
     def get_or_create(self, uid: int, name: str) -> RankEntry:
         with self._lock:
             if uid not in self._entries:
-                if self.rank_lim > 0 and len(self._entries) >= self.rank_lim:
+                if len(self._entries) >= self.rank_lim:
                     log.warning("MasterPlayCreate: maximum number of ranking lists (%d) exceeded.",
                                 self.rank_lim)
-                    return RankEntry(uid, name)
                 self._entries[uid] = RankEntry(uid, name)
-                self._dirty = True
-                self._rebuild_lists()
-            elif name and self._entries[uid].name != name:
-                self._entries[uid].name = name
-                self._dirty = True
             return self._entries[uid]
 
     def get(self, uid: int) -> Optional[RankEntry]:
@@ -215,7 +200,9 @@ class RankingSystem:
 
         now = time.time()
         for uid, result in results.items():
-            entry = self.get_or_create(uid, str(result.get("name", f"uid:{uid}")))
+            entry = self.get(uid)
+            if not entry:
+                continue
 
             # Check minimum game time
             game_duration = result.get("duration", 0)
@@ -226,17 +213,16 @@ class RankingSystem:
 
             outcome  = result.get("outcome", "LOSS")   # WIN/LOSS/DRAW
             score_d  = result.get("score_delta", 0.0)
-            outcome_key = str(outcome or "").strip().upper()
 
-            if outcome_key == "WIN":
+            if outcome == "WIN":
                 entry.wins  += 1
                 entry.score += max(10.0, score_d)
-            elif outcome_key in ("DRAW", "TIE"):
-                entry.draws += 1
-                entry.score += 1.0
-            else:
+            elif outcome == "LOSS":
                 entry.losses += 1
                 entry.score  = max(0.0, entry.score - 5.0 + score_d)
+            else:
+                entry.draws += 1
+                entry.score += 1.0
 
             entry.games     += 1
             entry.play_time += game_duration
@@ -292,9 +278,6 @@ class RankingSystem:
                 data = json.load(f)
             entries = data.get("entries", [])
             for d in entries:
-                if self.rank_lim > 0 and len(self._entries) >= self.rank_lim:
-                    log.warning("Ranking load capped at RANKLIM=%d; remaining entries ignored.", self.rank_lim)
-                    break
                 e = RankEntry(d["uid"], d["name"])
                 e.score     = d.get("score", 0.0)
                 e.wins      = d.get("wins", 0)
@@ -363,7 +346,7 @@ class StatsSystem:
         self._dirty     = False
 
         self.stats_file     = cfg.get("STATSFILE", "data/stats.dat")
-        self.stats_lim      = _limit_value(cfg.get("STATLIM", 10000), 10000)
+        self.stats_lim      = cfg.get("STATLIM", 10000)
         self.stat_refresh   = cfg.get("SERVER_STAT_REFRESH", 60)
 
         self._load()
@@ -373,9 +356,6 @@ class StatsSystem:
     def get_user_stat(self, uid: int, cat_id: int) -> StatCategory:
         with self._lock:
             if uid not in self._user_stats:
-                if self.stats_lim > 0 and len(self._user_stats) >= self.stats_lim:
-                    log.warning("STAT: maximum number of user stats (%d) exceeded.", self.stats_lim)
-                    return StatCategory(cat_id, f"Cat{cat_id}")
                 self._user_stats[uid] = {}
             if cat_id not in self._user_stats[uid]:
                 self._user_stats[uid][cat_id] = StatCategory(cat_id, f"Cat{cat_id}")
@@ -385,10 +365,7 @@ class StatsSystem:
         """stat %s(%s) param %d"""
         cat = self.get_user_stat(uid, cat_id)
         cat.set(col, value)
-        with self._lock:
-            stored = uid in self._user_stats and cat_id in self._user_stats.get(uid, {})
-        if stored:
-            self._dirty = True
+        self._dirty = True
         log.debug("stat %s(%s) uid=%d = %s", cat.name, col, uid, value)
 
     def get_stat(self, uid: int, cat_id: int, col: str, default=None):
@@ -430,9 +407,8 @@ class StatsSystem:
         with self._lock:
             stat = self._player_stats.get(key)
             if stat is None and create:
-                if self.stats_lim > 0 and len(self._player_stats) >= self.stats_lim:
+                if len(self._player_stats) >= self.stats_lim:
                     log.warning("STAT: maximum number of player stats (%d) exceeded.", self.stats_lim)
-                    return None
                 stat = NFSU2PlayerStats(persona)
                 self._player_stats[key] = stat
                 self._dirty = True
@@ -444,79 +420,18 @@ class StatsSystem:
         stat = self.get_player_stats(persona, create=True)
         if stat is None:
             stat = NFSU2PlayerStats(persona or "Player")
-        with self._lock:
-            self._refresh_ratings_locked()
         return stat.full_hex_csv()
-
-    def profile_stat_csv(self, persona: str) -> str:
-        stat = self.get_player_stats(persona, create=True)
-        if stat is None:
-            stat = NFSU2PlayerStats(persona or "Player")
-        with self._lock:
-            self._refresh_ratings_locked()
-            values = list(stat.values)
-        # The captured USER profile frame carries three extra profile/car slots
-        # after the 5x7 race stat block.
-        values.extend([0, 0, 0])
-        return ",".join(f"{max(0, int(value)):x}" for value in values) + ","
-
-    def player_summary(self, persona: str) -> dict:
-        stat = self.get_player_stats(persona, create=True)
-        if stat is None:
-            stat = NFSU2PlayerStats(persona or "Player")
-        with self._lock:
-            self._refresh_ratings_locked()
-            return {
-                "rank": stat.get(0, "rating"),
-                "wins": stat.get(0, "wins"),
-                "losses": stat.get(0, "losses"),
-                "disconnects": stat.get(0, "disconnects"),
-                "rep": stat.get(0, "rep"),
-            }
 
     def player_personas(self) -> List[str]:
         with self._lock:
             return [stat.persona for stat in self._player_stats.values() if stat.persona]
 
-    def record_player_result(
-        self,
-        persona: str,
-        outcome: str,
-        category_index: int = 0,
-        opponent_personas: Optional[Iterable[str]] = None,
-    ):
+    def record_player_result(self, persona: str, outcome: str, category_index: int = 0):
         stat = self.get_player_stats(persona, create=True)
         if stat is None:
             return
-        norm_persona = self._norm_persona(persona)
-        opponent_stats = []
-        seen_opponents = set()
-        for opponent in opponent_personas or ():
-            opponent_key = self._norm_persona(opponent)
-            if not opponent_key or opponent_key == norm_persona or opponent_key in seen_opponents:
-                continue
-            opponent_stat = self.get_player_stats(opponent, create=True)
-            if opponent_stat is None:
-                continue
-            seen_opponents.add(opponent_key)
-            opponent_stats.append(opponent_stat)
         with self._lock:
-            self._refresh_ratings_locked()
-            opponent_avgs = {}
-            for cat_idx in {0, max(0, min(4, int(category_index)))}:
-                if not opponent_stats:
-                    continue
-                rep_values = [item.get(cat_idx, "rep") for item in opponent_stats]
-                rating_values = [item.get(cat_idx, "rating") for item in opponent_stats]
-                if rep_values and rating_values:
-                    opponent_avgs[cat_idx] = (
-                        int(round(sum(rep_values) / len(rep_values))),
-                        int(round(sum(rating_values) / len(rating_values))),
-                    )
             stat.bump_result(category_index, outcome)
-            for cat_idx, (opps_rep, opps_rating) in opponent_avgs.items():
-                stat.set(cat_idx, "opps_rep", opps_rep)
-                stat.set(cat_idx, "opps_rating", opps_rating)
             self._refresh_ratings_locked()
             self._dirty = True
 
@@ -585,9 +500,6 @@ class StatsSystem:
             with open(path, "r") as f:
                 data = json.load(f)
             for uid_str, cats in data.get("user_stats", {}).items():
-                if self.stats_lim > 0 and len(self._user_stats) >= self.stats_lim:
-                    log.warning("Stats load capped at STATLIM=%d for user stats; remaining entries ignored.", self.stats_lim)
-                    break
                 uid = int(uid_str)
                 self._user_stats[uid] = {}
                 for cat_id_str, cat_data in cats.items():
@@ -596,9 +508,6 @@ class StatsSystem:
                     cat.columns = cat_data.get("columns", {})
                     self._user_stats[uid][cat_id] = cat
             for persona, stat_data in data.get("player_stats", {}).items():
-                if self.stats_lim > 0 and len(self._player_stats) >= self.stats_lim:
-                    log.warning("Stats load capped at STATLIM=%d for player stats; remaining entries ignored.", self.stats_lim)
-                    break
                 if isinstance(stat_data, dict):
                     stat_persona = stat_data.get("persona", persona)
                     values = stat_data.get("values", [])
