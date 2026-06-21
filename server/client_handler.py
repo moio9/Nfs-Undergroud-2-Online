@@ -194,6 +194,7 @@ class ClientHandler:
         self._probe_seen_auth = False
         self._probe_deferred_addr_frame = b""
         self._probe_deferred_skey_frame = b""
+        self._lobby_last_skey = ""
         self._secure20921_step = 0
         self._secure20921_token = b""
         self._secure20921_peer_blob = _LOBBY_20921_CHALLENGE
@@ -2611,12 +2612,28 @@ class ClientHandler:
                 ]
             )
 
-        news_host = str(
-            self.srv.cfg.get("LOBBY_NEWS_HOST", "")
-            or self.srv.control_host(self.user.conn)
+        raw_news_host = str(self.srv.cfg.get("LOBBY_NEWS_HOST", "") or "").strip()
+        control_host = str(
+            self.srv.control_host(self.user.conn)
             or self._lobby_server_addr()
             or "127.0.0.1"
         ).strip()
+        news_path = "/news"
+        if raw_news_host.startswith("/"):
+            news_path = raw_news_host
+            news_host = control_host
+        elif "://" in raw_news_host:
+            # The legacy client expects BUDDY_SERVER to be a host only. Full
+            # URLs belong in NEWSURL/TOSURL, not in the messenger endpoint.
+            news_host = control_host
+        else:
+            news_host = raw_news_host or control_host
+        if not news_path.startswith("/"):
+            news_path = "/" + news_path
+
+        tos_path = str(self.srv.cfg.get("LOBBY_TOS_FILE", "") or "/tos").strip() or "/tos"
+        if not tos_path.startswith("/"):
+            tos_path = "/" + tos_path
         try:
             buddy_port = int(self.srv.cfg.get("LOBBY_NEWS_BUDDY_PORT", 0) or 0)
         except (TypeError, ValueError):
@@ -2637,14 +2654,14 @@ class ClientHandler:
             http_host = f"{news_host}:{http_port}"
 
         news_lines = [
-            f"TOSURL=http://{http_host}/tos",
+            f"TOSURL=http://{http_host}{tos_path}",
             "CIRCUIT_TIER_POINTS=0,1999,4999,9999,19999,39999,59999,79999,99999,119999",
             "DRAG_TIER_POINTS=0,1999,4999,9999,19999,39999,59999,79999,99999,119999",
             "URL_TIER_POINTS=0,1999,4999,9999,19999,39999,59999,79999,99999,119999",
-            f"BUDDY_SERVER={news_host}",
+            f"BUDDY_SERVER={control_host}",
             f"BUDDY_PORT={buddy_port}",
             "STREET_CROSS_TIER_POINTS=0,1999,4999,9999,19999,39999,59999,79999,99999,119999",
-            f"NEWSURL=http://{http_host}/news",
+            f"NEWSURL=http://{http_host}{news_path}",
             "SPRINT_TIER_POINTS=0,1999,4999,9999,19999,39999,59999,79999,99999",
             "DRIFT_TIER_POINTS=0,1999,4999,9999,19999,39999,59999,79999,99999,119999",
         ]
@@ -2855,6 +2872,60 @@ class ClientHandler:
             reserved_be32=reserved_be32,
         )
 
+    def _lobby_replace_older_same_ip_account_session(self, other, account_name: str = "") -> bool:
+        """
+        Replace stale duplicate logins created by the stock client during reconnect/logout.
+        Only a newer UID may replace an older UID, and only when both sessions come from
+        the same peer IP. Older delayed connections are still rejected and cannot kick a
+        newer active login.
+        """
+        try:
+            current_uid = int(getattr(self.user, "uid", 0) or 0)
+            other_uid = int(getattr(other, "uid", 0) or 0)
+        except Exception:
+            return False
+        if current_uid <= 0 or other_uid <= 0 or current_uid <= other_uid:
+            return False
+
+        current_ip = str(getattr(self.user, "ip", "") or "").strip()
+        other_ip = str(getattr(other, "ip", "") or "").strip()
+        if current_ip and other_ip and current_ip != other_ip:
+            return False
+
+        try:
+            other.connected = False
+        except Exception:
+            pass
+
+        conn = getattr(other, "conn", None)
+        if conn is not None:
+            try:
+                conn.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+        try:
+            self.srv.users.remove(other_uid)
+        except Exception:
+            pass
+        try:
+            self.srv.request_master_stat_refresh()
+        except Exception:
+            pass
+
+        log.info(
+            "[uid=%d] account duplicate replaced older session old_uid=%d account=%s ip=%s",
+            current_uid,
+            other_uid,
+            str(account_name or getattr(other, "name", "") or "-").strip() or "-",
+            current_ip or "-",
+        )
+        return True
+
     def _lobby_account_conflict(self, account_name: str):
         wanted = str(account_name or "").strip().lower()
         if not wanted:
@@ -2866,6 +2937,8 @@ class ClientHandler:
                 continue
             other_name = str(getattr(other, "name", "") or "").strip().lower()
             if other_name and other_name == wanted:
+                if self._lobby_replace_older_same_ip_account_session(other, account_name):
+                    continue
                 return other
         for handler in self._snapshot_lobby_handlers():
             if handler is self:
@@ -2880,6 +2953,8 @@ class ClientHandler:
                 getattr(handler, "_probe_display_name", "") or getattr(other, "name", "") or ""
             ).strip().lower()
             if other_name and other_name == wanted:
+                if self._lobby_replace_older_same_ip_account_session(other, account_name):
+                    continue
                 return other
         return None
 
@@ -2959,6 +3034,28 @@ class ClientHandler:
         self._disconnect_reason = f"auth_failed:{reason}"
         self._lobby_close_after_auth_reject(self._lobby_auth_reject_close_delay(repeat, interval))
 
+    def _lobby_auth_kv_with_challenge(self, kv: dict) -> dict:
+        auth_kv = dict(kv or {})
+        sess, dir_mask = self.srv.recent_lobby_dir_challenge(self.user.ip)
+        if not sess or not dir_mask:
+            _, _, sess, dir_mask = self._lobby_dir_fields()
+
+        # U2 sends a stable SKEY before account/auth frames.  The password
+        # token is tied to that key, not to the rotating @dir session mask.
+        # If we store a hash made from the rotating wire token, the account
+        # works only once and then fails with bad_password on the next login.
+        skey = str(self._lobby_last_skey or auth_kv.get("SKEY", "") or "").strip()
+        if skey:
+            auth_kv.setdefault("SKEY", skey)
+            auth_kv.setdefault("MASK", skey)
+            auth_kv.setdefault("AUTH_SKEY", skey)
+        else:
+            auth_kv.setdefault("MASK", dir_mask)
+
+        auth_kv.setdefault("SESS", sess)
+        auth_kv["CHALLENGE"] = dir_mask
+        return auth_kv
+
     def _lobby_accept_auth(self, kv: dict, fallback_name: str, fallback_persona: str, send_frame) -> bool:
         if self.srv.is_user_banned(self.user):
             identifier = self.user.name or fallback_name or "-"
@@ -2969,13 +3066,7 @@ class ClientHandler:
                 reserved_be32=_LOBBY_AUTH_BLAK_RESERVED,
             )
             return False
-        auth_kv = dict(kv or {})
-        sess, mask = self.srv.recent_lobby_dir_challenge(self.user.ip)
-        if not sess or not mask:
-            _, _, sess, mask = self._lobby_dir_fields()
-        auth_kv.setdefault("SESS", sess)
-        auth_kv.setdefault("MASK", mask)
-        auth_kv["CHALLENGE"] = mask
+        auth_kv = self._lobby_auth_kv_with_challenge(kv)
         ok, reason, account, identifier = self.srv.authenticate_login(auth_kv)
         if ok:
             if account:
@@ -4918,6 +5009,7 @@ class ClientHandler:
                 decoded += 1
                 continue
             if cmd == "skey":
+                self._lobby_last_skey = str(kv.get("SKEY", "") or "").strip() or self._lobby_last_skey
                 log.info(
                     "[uid=%d] 20922 bootstrap prelogin cmd=%s tail=%s keys=%s",
                     self.user.uid,
@@ -4987,7 +5079,8 @@ class ClientHandler:
                 decoded += 1
                 continue
             if cmd == "acct":
-                ok, reason, account, identifier = self.srv.create_account(kv)
+                acct_kv = self._lobby_auth_kv_with_challenge(kv)
+                ok, reason, account, identifier = self.srv.create_account(acct_kv)
                 if ok and account:
                     self._lobby_apply_auth_account(account, identifier, identifier)
                     name = self._probe_display_name or identifier
@@ -5396,6 +5489,7 @@ class ClientHandler:
             return True
 
         if cmd == "skey":
+            self._lobby_last_skey = str(kv.get("SKEY", "") or "").strip() or self._lobby_last_skey
             log.info(
                 "[uid=%d] 20922 bootstrap plaintext cmd=%s tail=%s keys=%s",
                 self.user.uid,
@@ -5598,7 +5692,8 @@ class ClientHandler:
             return
 
         if cmd == "acct":
-            ok, reason, account, identifier = self.srv.create_account(kv)
+            acct_kv = self._lobby_auth_kv_with_challenge(kv)
+            ok, reason, account, identifier = self.srv.create_account(acct_kv)
             if ok and account:
                 self._lobby_apply_auth_account(account, identifier, identifier)
                 name = self._probe_display_name or identifier

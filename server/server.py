@@ -1149,12 +1149,39 @@ class GameServer:
         return out.decode("latin-1", errors="ignore")
 
     @staticmethod
+    def _auth_add_mask_candidate(masks: List[str], value: str) -> None:
+        text = str(value or "").strip()
+        if not text:
+            return
+
+        def add(candidate: str) -> None:
+            candidate = str(candidate or "").strip()
+            if candidate and candidate not in masks:
+                masks.append(candidate)
+
+        add(text)
+
+        # Some clients send SKEY as "$" + hex("Public Key").  The password
+        # codec needs the real key bytes too, not only the visible hex text.
+        hex_text = text[1:] if text.startswith("$") else text
+        if len(hex_text) >= 2 and len(hex_text) % 2 == 0:
+            try:
+                raw = bytes.fromhex(hex_text)
+            except ValueError:
+                raw = b""
+            if raw:
+                add(hex_text)
+                try:
+                    add(raw.decode("latin-1", errors="ignore"))
+                except Exception:
+                    pass
+
+    @staticmethod
     def _auth_mask_candidates(kv: dict) -> List[str]:
         masks: List[str] = []
-        for key in ("MASK", "PSES", "SESS", "CHAL", "CHALLENGE"):
+        for key in ("MASK", "SKEY", "AUTH_SKEY", "PSES", "SESS", "CHAL", "CHALLENGE"):
             value = GameServer._auth_kv_value(kv, key)
-            if value and value not in masks:
-                masks.append(value)
+            GameServer._auth_add_mask_candidate(masks, value)
         return masks
 
     @staticmethod
@@ -1228,9 +1255,22 @@ class GameServer:
         if supplied is None:
             supplied = ""
         supplied = str(supplied)
-        for encoded in GameServer._auth_password_hashes(account):
-            if GameServer._auth_pbkdf2_verify(supplied, encoded):
-                return True
+
+        supplied_sha256 = hashlib.sha256(supplied.encode("utf-8", errors="ignore")).hexdigest()
+        has_fast_hash = False
+        for key in ("password_sha256", "pass_sha256", "pass_wire_sha256"):
+            expected = str(account.get(key, "") or "").strip().lower()
+            if expected:
+                has_fast_hash = True
+                if expected == supplied_sha256:
+                    return True
+        for key in ("password_sha256s", "pass_sha256s", "pass_wire_sha256s"):
+            values = GameServer._auth_list(account.get(key))
+            if values:
+                has_fast_hash = True
+            for expected in values:
+                if str(expected or "").strip().lower() == supplied_sha256:
+                    return True
 
         for key in GameServer._auth_plain_password_keys():
             expected = account.get(key)
@@ -1241,16 +1281,21 @@ class GameServer:
                 if expected == supplied:
                     return True
 
-        supplied_sha256 = hashlib.sha256(supplied.encode("utf-8", errors="ignore")).hexdigest()
-        for key in ("password_sha256", "pass_sha256", "pass_wire_sha256"):
-            expected = str(account.get(key, "") or "").strip().lower()
-            if expected and expected == supplied_sha256:
-                return True
-
         supplied_md5 = hashlib.md5(supplied.encode("utf-8", errors="ignore")).hexdigest()
         for key in ("password_md5", "pass_md5", "pass_wire_md5"):
             expected = str(account.get(key, "") or "").strip().lower()
             if expected and expected == supplied_md5:
+                return True
+
+        # If a fast hash list exists, do not burn CPU on PBKDF2 for every wrong
+        # candidate.  The caller will try the next candidate immediately.  This
+        # fixes the 30-50 second reconnect delay on Termux accounts that contain
+        # many pass_wire_hashes.
+        if has_fast_hash:
+            return False
+
+        for encoded in GameServer._auth_password_hashes(account):
+            if GameServer._auth_pbkdf2_verify(supplied, encoded):
                 return True
         return False
 
@@ -1479,13 +1524,27 @@ class GameServer:
             "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         if password:
-            candidates = self._auth_password_candidates(kv, password)
-            stored_password = candidates[1] if len(candidates) > 1 else password
-            key = "password_pbkdf2" if stored_password != password else "pass_wire_pbkdf2"
-            account[key] = self._auth_pbkdf2_encode(
-                stored_password,
-                iterations=self._auth_pbkdf2_iterations(),
-            )
+            # Store every plausible stable form we can derive from the create-account
+            # packet.  U2 can send the password as a session/key encoded token; if we
+            # pick the wrong decoded form here, the account works only in the creation
+            # session and then fails with bad_password.  Verification already tries all
+            # candidates, so saving all candidate hashes is safer for this protocol.
+            candidates = []
+            seen_candidates = set()
+            for candidate in self._auth_password_candidates(kv, password):
+                candidate = str(candidate or "")
+                if candidate and candidate not in seen_candidates:
+                    seen_candidates.add(candidate)
+                    candidates.append(candidate)
+            if candidates:
+                # Store only fast wire hashes.  PBKDF2/large pass_wire_hashes made
+                # auth_accounts.json huge and caused slow reconnects when many
+                # wire-token candidates existed.
+                sha256s = [
+                    hashlib.sha256(candidate.encode("utf-8", errors="ignore")).hexdigest()
+                    for candidate in candidates
+                ]
+                account["pass_wire_sha256s"] = sha256s
         if email:
             account["email"] = email
         return account
