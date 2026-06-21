@@ -2377,7 +2377,11 @@ class ClientHandler:
         if len(payload) > body_cap:
             overflow = len(payload) - body_cap
             mail = fallback_mail[: max(1, len(fallback_mail) - overflow)]
+            persona = persona[: max(1, len(persona) - max(0, overflow - len(fallback_mail) + 1))]
+            name = name[: max(1, len(name) - max(0, overflow - len(fallback_mail) + 1 - len(persona)))]
             payload = build(mail, persona, name)
+        if len(payload) > body_cap:
+            payload = payload[:body_cap - 1] + b"\x00"
         return self._make_20922_signed_binary_message(
             "auth",
             payload,
@@ -5061,15 +5065,7 @@ class ClientHandler:
                 add_persona = getattr(self.srv, "add_lan_account_persona", None)
                 if callable(add_persona):
                     identifier = self._auth_identifier or self._auth_mail or self._probe_display_name or self.user.name
-                    add_ok = add_persona(identifier, requested)
-                    log.info(
-                        "[uid=%d] cper persist identifier=%r persona=%r ok=%s",
-                        self.user.uid,
-                        identifier,
-                        requested,
-                        add_ok,
-                    )
-                    if add_ok and requested.lower() not in {p.lower() for p in self._auth_personas}:
+                    if add_persona(identifier, requested) and requested.lower() not in {p.lower() for p in self._auth_personas}:
                         self._auth_personas.append(requested)
             self._probe_persona = requested
             self.user.pers = requested
