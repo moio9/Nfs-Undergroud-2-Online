@@ -1,6 +1,6 @@
 """
 client_handler.py — Per-client TCP command processor.
-Parses the stock LAN bootstrap (@tic/@dir) and the EA key=value protocol.
+Parses the stock bootstrap (@tic/@dir) and the EA key=value protocol.
 """
 
 import time
@@ -273,7 +273,7 @@ class ClientHandler:
     def _make_plain_frame(cmd4: str, payload: bytes) -> bytes:
         raw = cmd4.encode("latin1", errors="ignore")
         if len(raw) != 4:
-            raise ValueError(f"invalid LAN bootstrap cmd: {cmd4!r}")
+            raise ValueError(f"invalid bootstrap cmd: {cmd4!r}")
         return raw + b"\x00\x00\x00\x00" + struct.pack(">I", 12 + len(payload)) + payload
 
     def _dir_fields(self, port_override: int | None = None) -> tuple[str, int, str, str]:
@@ -356,7 +356,7 @@ class ClientHandler:
             f"MASK={mask}",
         ] + self._lite_bootstrap_fields() + self._advertised_relay_fields(self.user)
         log.info(
-            f"[uid={self.user.uid}] LAN bootstrap @dir reply addr={host} port={port} sess={sess}"
+            f"[uid={self.user.uid}] bootstrap @dir reply addr={host} port={port} sess={sess}"
         )
         payload = "\t".join(fields).encode("ascii") + b"\x00"
         return self._make_plain_frame("@dir", payload)
@@ -429,7 +429,7 @@ class ClientHandler:
         if len(payload) < 84:
             payload += b"\x00" * (84 - len(payload))
         log.info(
-            "[uid=%d] LAN bootstrap secure @dir reply addr=%s port=%d sess=%s",
+            "[uid=%d] bootstrap secure @dir reply addr=%s port=%d sess=%s",
             self.user.uid,
             host,
             port,
@@ -501,7 +501,7 @@ class ClientHandler:
                 self.user.send_bytes(self._make_20921_cert_frame(self._secure20921_peer_blob))
                 self._secure20921_step = 1
                 log.info(
-                    "[uid=%d] LAN bootstrap secure hello len=%d token=%s",
+                    "[uid=%d] bootstrap secure hello len=%d token=%s",
                     self.user.uid,
                     len(frame),
                     self._secure20921_token.hex(),
@@ -511,13 +511,13 @@ class ClientHandler:
 
             if self._secure20921_step == 1:
                 if len(frame) != 140:
-                    log.warning("[uid=%d] LAN bootstrap secure rsa mismatch len=%d", self.user.uid, len(frame))
+                    log.warning("[uid=%d] bootstrap secure rsa mismatch len=%d", self.user.uid, len(frame))
                     break
                 cipher = int.from_bytes(frame[-128:], "big")
                 plain_block = pow(cipher, _20921_RSA_D, _20921_RSA_N).to_bytes(128, "big")
                 unpadded = self._rsa_pkcs1_unpad_20921(plain_block)
                 if unpadded is None or len(unpadded) < 16:
-                    log.warning("[uid=%d] LAN bootstrap secure rsa unpad failed", self.user.uid)
+                    log.warning("[uid=%d] bootstrap secure rsa unpad failed", self.user.uid)
                     break
                 work = unpadded[-16:]
                 self._secure20921_recv_md5_key = md5(
@@ -537,20 +537,20 @@ class ClientHandler:
                 self._secure20921_send_seq += 1
                 self.user.send_bytes(out)
                 self._secure20921_step = 2
-                log.info("[uid=%d] LAN bootstrap secure rsa ok sent=Q", self.user.uid)
+                log.info("[uid=%d] bootstrap secure rsa ok sent=Q", self.user.uid)
                 consumed += total
                 continue
 
             if self._secure20921_step == 2:
                 if len(frame) != 35 or (frame[0] & 0x80) == 0:
-                    log.warning("[uid=%d] LAN bootstrap secure step35 mismatch len=%d", self.user.uid, len(frame))
+                    log.warning("[uid=%d] bootstrap secure step35 mismatch len=%d", self.user.uid, len(frame))
                     break
                 self._secure20921_recv_state, body = self._decrypt_20921_secure_frame(
                     self._secure20921_recv_state,
                     frame,
                 )
                 if len(body) >= 17 and body[0] == 0x03 and body[1:17] != self._secure20921_peer_blob:
-                    log.info("[uid=%d] LAN bootstrap secure peer echo differs", self.user.uid)
+                    log.info("[uid=%d] bootstrap secure peer echo differs", self.user.uid)
                 self._secure20921_send_state, out = self._make_20921_secure_frame(
                     self._secure20921_send_md5_key,
                     self._secure20921_send_state,
@@ -561,7 +561,7 @@ class ClientHandler:
                 self.user.send_bytes(out)
                 self._secure20921_step = 3
                 self._secure20921_plain_buf.clear()
-                log.info("[uid=%d] LAN bootstrap secure step35 ok sent=7", self.user.uid)
+                log.info("[uid=%d] bootstrap secure step35 ok sent=7", self.user.uid)
                 consumed += total
                 continue
 
@@ -577,7 +577,7 @@ class ClientHandler:
                         del self._secure20921_plain_buf[:decoded]
                     elif plain:
                         log.info(
-                            "[uid=%d] LAN bootstrap secure plain undecoded len=%d head=%s",
+                            "[uid=%d] bootstrap secure plain undecoded len=%d head=%s",
                             self.user.uid,
                             len(plain),
                             plain[:48].hex(),
@@ -586,7 +586,7 @@ class ClientHandler:
                         del self._secure20921_plain_buf[:-32768]
                     if self._secure20921_step == 3:
                         self._secure20921_step = 5
-                        log.info("[uid=%d] LAN bootstrap secure handshake complete", self.user.uid)
+                        log.info("[uid=%d] bootstrap secure handshake complete", self.user.uid)
                     consumed += total
                     continue
                 except Exception:
@@ -665,7 +665,7 @@ class ClientHandler:
     def _make_short_frame(tag8: str) -> bytes:
         raw = tag8.encode("latin1", errors="ignore")
         if len(raw) != 8:
-            raise ValueError(f"invalid short LAN frame tag: {tag8!r}")
+            raise ValueError(f"invalid short frame tag: {tag8!r}")
         return raw + struct.pack(">I", 12)
 
     @staticmethod
@@ -829,9 +829,9 @@ class ClientHandler:
 
     def _frame_trace_enabled(self) -> bool:
         try:
-            return int(self.srv.cfg.get("LAN_FRAME_TRACE", 1) or 0) != 0
+            return int(self.srv.cfg.get("LOBBY_FRAME_TRACE", self.srv.cfg.get("LAN_FRAME_TRACE", 0)) or 0) != 0
         except Exception:
-            return True
+            return False
 
     @staticmethod
     def _trace_kv_text(kv: dict) -> str:
@@ -861,7 +861,7 @@ class ClientHandler:
         game = self.srv.games.get(game_id) if game_id else None
         participants = ",".join(str(int(uid)) for uid in (getattr(game, "participants", []) or [])) if game is not None else "-"
         log.info(
-            "[uid=%d] LAN trace recv cmd=%s token=%08x user_game=%d stat=%s host=%d parts=%s keys=%s fields=%s",
+            "[uid=%d] trace recv cmd=%s token=%08x user_game=%d stat=%s host=%d parts=%s keys=%s fields=%s",
             self.user.uid,
             cmd,
             reserved_be32 & 0xFFFFFFFF,
@@ -889,7 +889,7 @@ class ClientHandler:
                 kv = self._parse_20922_kv(payload)
                 key_order = self._trace_key_order(kv) if cmd in _TRACE_ORDER_CMDS else "-"
                 log.info(
-                    "[uid=%d] LAN trace send label=%s cmd=%s len=%d order=%s fields=%s",
+                    "[uid=%d] trace send label=%s cmd=%s len=%d order=%s fields=%s",
                     self.user.uid,
                     label or "-",
                     cmd,
@@ -980,7 +980,7 @@ class ClientHandler:
                     return
             self._send_bootstrap_bytes(data, label=label)
             if label:
-                log.info("[uid=%d] LAN bootstrap delayed send %s len=%d", self.user.uid, label, len(data))
+                log.info("[uid=%d] bootstrap delayed send %s len=%d", self.user.uid, label, len(data))
 
         timer = threading.Timer(delay_s, _job)
         timer.daemon = True
@@ -1060,7 +1060,7 @@ class ClientHandler:
             replacements = [same_ip_candidates[0]]
         elif not replacements and len(same_ip_candidates) > 1:
             log.info(
-                "[uid=%d] LAN bootstrap detached user replacement skipped ambiguous_ip=%s candidates=%s",
+                "[uid=%d] bootstrap detached user replacement skipped ambiguous_ip=%s candidates=%s",
                 current_uid,
                 current_ip or "-",
                 ",".join(str(int(getattr(other, "uid", 0) or 0)) for other in same_ip_candidates),
@@ -1079,7 +1079,7 @@ class ClientHandler:
                     other.game = 0
                     self._on_game_departure(game or game_after, departed_uid=other_uid, removed=removed)
                     log.info(
-                        "[uid=%d] LAN bootstrap discarded detached open game old_uid=%d game=%d removed=%d state=%s",
+                        "[uid=%d] bootstrap discarded detached open game old_uid=%d game=%d removed=%d state=%s",
                         current_uid,
                         other_uid,
                         game_id,
@@ -1110,7 +1110,7 @@ class ClientHandler:
                     self._reattached_active_game_id = int(game.id)
                     reset_games.append(game)
                     log.info(
-                        "[uid=%d] LAN bootstrap reattached detached game old_uid=%d game=%d host=%d state=%s",
+                        "[uid=%d] bootstrap reattached detached game old_uid=%d game=%d host=%d state=%s",
                         current_uid,
                         other_uid,
                         int(getattr(game, "id", 0) or 0),
@@ -1136,7 +1136,7 @@ class ClientHandler:
             self.srv.users.remove(other_uid)
             removed_any = True
             log.info(
-                "[uid=%d] LAN bootstrap replaced detached user old_uid=%d name=%s pers=%s ip=%s",
+                "[uid=%d] bootstrap replaced detached user old_uid=%d name=%s pers=%s ip=%s",
                 current_uid,
                 other_uid,
                 getattr(other, "name", "") or "-",
@@ -1231,7 +1231,7 @@ class ClientHandler:
             pass
         conflict_uid = int(getattr(conflict, "uid", 0) or 0)
         log.warning(
-            "[uid=%d] LAN persona rejected stage=%s persona=%s already_uid=%d already_name=%s",
+            "[uid=%d] persona rejected stage=%s persona=%s already_uid=%d already_name=%s",
             self.user.uid,
             stage,
             str(persona or "-")[:64],
@@ -1276,7 +1276,7 @@ class ClientHandler:
     @staticmethod
     def _format_time(ts: float | None = None) -> str:
         tm = time.localtime(time.time() if ts is None else ts)
-        # LAN captures use non-padded month/day but fixed-width HH:MM:SS.
+        # captures use non-padded month/day but fixed-width HH:MM:SS.
         return f"{tm.tm_year}.{tm.tm_mon}.{tm.tm_mday} {tm.tm_hour:02d}:{tm.tm_min:02d}:{tm.tm_sec:02d}"
 
     def _server_addr(self) -> str:
@@ -1361,7 +1361,7 @@ class ClientHandler:
             reason = f"{reason} LANG={lang}".strip()
         self.srv.control_social_report(self._persona(), target, reason)
         log.info(
-            "[uid=%d] LAN bootstrap %s cmd=rept reporter=%s target=%s type=%s lang=%s",
+            "[uid=%d] bootstrap %s cmd=rept reporter=%s target=%s type=%s lang=%s",
             self.user.uid,
             source,
             self._persona() or "-",
@@ -1414,7 +1414,7 @@ class ClientHandler:
             self.srv.request_master_stat_refresh()
             removed_any = True
             log.info(
-                "[uid=%d] LAN bootstrap cleared dead game reference reason=%s game=%d (externally destroyed)",
+                "[uid=%d] bootstrap cleared dead game reference reason=%s game=%d (externally destroyed)",
                 uid,
                 reason or "-",
                 stale_game_id,
@@ -1434,7 +1434,7 @@ class ClientHandler:
             self._on_game_departure(game or game_after, departed_uid=uid, removed=removed)
             removed_any = True
             log.info(
-                "[uid=%d] LAN bootstrap cleared stale game membership reason=%s game=%d removed=%d",
+                "[uid=%d] bootstrap cleared stale game membership reason=%s game=%d removed=%d",
                 uid,
                 reason or "-",
                 game_id,
@@ -1494,7 +1494,7 @@ class ClientHandler:
         )
         self.srv.request_master_stat_refresh()
         log.info(
-            "[uid=%d] LAN bootstrap finalized reattached active game for lobby game=%d reason=%s participants=%s",
+            "[uid=%d] bootstrap finalized reattached active game for lobby game=%d reason=%s participants=%s",
             int(getattr(self.user, "uid", 0) or 0),
             game_id,
             reason or "-",
@@ -1567,7 +1567,7 @@ class ClientHandler:
             if target_uid in kicked:
                 kicked.discard(target_uid)
                 log.info(
-                    "[uid=%d] LAN invite cleared kicked state target_uid=%d target=%s game=%d",
+                    "[uid=%d] invite cleared kicked state target_uid=%d target=%s game=%d",
                     self.user.uid,
                     target_uid,
                     target_name or "-",
@@ -1643,7 +1643,7 @@ class ClientHandler:
         )
         target_handler._send_later_bytes(0.01, b"".join(frames), label="game-invite-target")
         log.info(
-            "[uid=%d] LAN invite delivered target_uid=%d target=%s game=%d frames=%d",
+            "[uid=%d] invite delivered target_uid=%d target=%s game=%d frames=%d",
             self.user.uid,
             int(target_user.uid),
             target_name or "-",
@@ -1720,9 +1720,9 @@ class ClientHandler:
                 game = self.srv.games.get(game_id)
                 host_uid = int(getattr(game, "host_uid", 0) or 0) if game is not None else 0
                 if game is not None and int(user.uid) != host_uid:
-                    lan_addr = self._detect_host_ipv4()
-                    if lan_addr:
-                        return lan_addr
+                    local_addr = self._detect_host_ipv4()
+                    if local_addr:
+                        return local_addr
         return addr
 
     def _game_loopback_mode(self) -> bool:
@@ -1801,7 +1801,7 @@ class ClientHandler:
             if handler.user.game == game_id or int(handler.user.uid) in game_uids:
                 out.append(handler)
         log.info(
-            "[uid=%d] LAN bootstrap handler lookup game=%d game_uids=%s selected=%s snapshot=%s",
+            "[uid=%d] bootstrap handler lookup game=%d game_uids=%s selected=%s snapshot=%s",
             self.user.uid,
             int(game_id),
             sorted(game_uids),
@@ -1819,9 +1819,9 @@ class ClientHandler:
             return "127.0.0.1"
         host_uid = int(getattr(game, "host_uid", 0) or 0) if game is not None else 0
         if addr.startswith("127.") and host_uid and int(uid) != host_uid:
-            lan_addr = self._detect_host_ipv4()
-            if lan_addr:
-                return lan_addr
+            local_addr = self._detect_host_ipv4()
+            if local_addr:
+                return local_addr
         return addr
 
     def _shared_private_addr(self, game) -> str:
@@ -1904,8 +1904,8 @@ class ClientHandler:
                 if loopback_mode:
                     addr = "127.0.0.1"
                 else:
-                    # Same-PC LAN runs are separated by forced UDP ports now,
-                    # so keep both clients on the reachable LAN address. The
+                    # Same-PC runs are separated by forced UDP ports now,
+                    # so keep both clients on the reachable local address. The
                     # loopback self-view can leave the host stuck before it
                     # emits the first raw race-state packets.
                     addr = shared_private_addr
@@ -1992,7 +1992,7 @@ class ClientHandler:
         setattr(game, "_player_partparams", part_store)
         setattr(game, "_player_opparams", opp_store)
         log.info(
-            "[uid=%d] LAN gset params stored game=%d userpart=%d userparams=%s part=%s opp=%s keys=%s",
+            "[uid=%d] gset params stored game=%d userpart=%d userparams=%s part=%s opp=%s keys=%s",
             int(uid),
             int(getattr(game, "id", 0) or 0),
             userpart,
@@ -2142,7 +2142,7 @@ class ClientHandler:
         return {
             "missing_identifier": "Account name is missing.",
             "missing_password": "Password is missing.",
-            "no_accounts": "No LAN auth accounts are configured.",
+            "no_accounts": "No auth accounts are configured.",
             "unknown_account": "Account is not recognized.",
             "bad_password": "Password is incorrect.",
             "rate_limited": "Too many failed login attempts.",
@@ -2252,7 +2252,7 @@ class ClientHandler:
                 return
             try:
                 send_frame(frame)
-                log.info("[uid=%d] LAN bootstrap delayed send %s len=%d", self.user.uid, label, len(frame))
+                log.info("[uid=%d] bootstrap delayed send %s len=%d", self.user.uid, label, len(frame))
             except Exception:
                 pass
 
@@ -2279,7 +2279,7 @@ class ClientHandler:
             self._send_auth_reject_later(send_frame, frame, interval * idx, f"auth-reject-{idx + 1}")
         safe_identifier = (identifier or "-").replace("\n", " ").replace("\r", " ")
         log.warning(
-            "[uid=%d] LAN auth rejected reason=%s id=%s text=%s",
+            "[uid=%d] auth rejected reason=%s id=%s text=%s",
             self.user.uid,
             reason,
             safe_identifier[:96],
@@ -2293,8 +2293,8 @@ class ClientHandler:
         sess, mask = self.srv.recent_dir_challenge(self.user.ip)
         if not sess or not mask:
             _, _, sess, mask = self._dir_fields()
-        auth_kv.setdefault("SESS", sess)
-        auth_kv.setdefault("MASK", mask)
+        auth_kv["SESS"] = sess
+        auth_kv["MASK"] = mask
         auth_kv["CHALLENGE"] = mask
         ok, reason, account, identifier = self.srv.authenticate_login(auth_kv)
         if ok:
@@ -2310,7 +2310,7 @@ class ClientHandler:
                     reserved_be32=_AUTH_LOGN_RESERVED,
                 )
                 log.warning(
-                    "[uid=%d] LAN auth rejected account in use account=%s already_uid=%d",
+                    "[uid=%d] auth rejected account in use account=%s already_uid=%d",
                     self.user.uid,
                     str(account_name or "-")[:64],
                     int(getattr(conflict, "uid", 0) or 0),
@@ -2434,7 +2434,7 @@ class ClientHandler:
         try:
             return self.srv.stats.player_stat_csv(persona)
         except Exception as exc:
-            log.warning("[uid=%d] LAN stats fallback persona=%r error=%s", self.user.uid, persona, exc)
+            log.warning("[uid=%d] stats fallback persona=%r error=%s", self.user.uid, persona, exc)
             return ",".join(["270f", "0", "0", "0", "64", "65", "65"] * 5)
 
     def _player_stat_csv_for_user(self, user: User) -> str:
@@ -2646,7 +2646,7 @@ class ClientHandler:
                 )
         result = b"".join(frames)
         log.info(
-            "[uid=%d] LAN stats snap index=%d chan=%d board=%d start=%d range=%d rows=%d hex=%s",
+            "[uid=%d] stats snap index=%d chan=%d board=%d start=%d range=%d rows=%d hex=%s",
             self.user.uid,
             index,
             chan,
@@ -2856,7 +2856,7 @@ class ClientHandler:
                 int(getattr(handler.user, "game", 0) or 0) > 0 or getattr(handler.user, "stat", "") == STAT_GAME
             ):
                 log.info(
-                    "[uid=%d] LAN suppress online-who subject_uid=%d subject_game=0 target_game=%s target_stat=%s",
+                    "[uid=%d] suppress online-who subject_uid=%d subject_game=0 target_game=%s target_stat=%s",
                     int(getattr(handler.user, "uid", 0) or 0),
                     int(getattr(subject, "uid", 0) or 0),
                     getattr(handler.user, "game", 0),
@@ -3130,7 +3130,7 @@ class ClientHandler:
                 addr = self._reachable_host_addr_for_viewer(int(viewer_uid))
             laddr = addr if loopback_mode else (str(snap.get("laddr", "") or addr) if tunnel_addrs else addr)
             relay_addr = ""
-            # In captured LAN room snapshots only PARAMS carries the race
+            # In captured room snapshots only PARAMS carries the race
             # setup; PARTPARAMS/OPPARAM are present but empty until race state.
             opparams.append(f"OPPARAM{idx}=")
             item_fields = [
@@ -3598,7 +3598,7 @@ class ClientHandler:
             notify_mgm = 0
         if not notify_mgm:
             log.info(
-                "[uid=%d] LAN bootstrap join-state suppressed game=%d joined_uid=%d",
+                "[uid=%d] bootstrap join-state suppressed game=%d joined_uid=%d",
                 joined_user.uid,
                 int(getattr(game, "id", 0) or 0),
                 int(joined_user.uid),
@@ -3656,7 +3656,7 @@ class ClientHandler:
         sst_frame = self._make_20922_tab_message("+sst", self._sst_presence_fields(gcr=1))
         handlers = self._game_handlers(game.id)
         log.info(
-            "[uid=%d] LAN bootstrap ready-state schedule game=%d handlers=%s",
+            "[uid=%d] bootstrap ready-state schedule game=%d handlers=%s",
             ready_user.uid,
             int(game.id),
             [
@@ -3706,7 +3706,7 @@ class ClientHandler:
             mgm_label = "gset-self-mgm" if is_self else "gset-peer-mgm"
             if is_unready_peer:
                 handler._send_bootstrap_bytes(mgm_frame)
-                log.info("[uid=%d] LAN bootstrap immediate send %s len=%d", handler.user.uid, mgm_label, len(mgm_frame))
+                log.info("[uid=%d] bootstrap immediate send %s len=%d", handler.user.uid, mgm_label, len(mgm_frame))
                 continue
             mgm_delay_s = delay_s
             handler._send_later_bytes(
@@ -3834,7 +3834,7 @@ class ClientHandler:
                 return
             handler._send_bootstrap_bytes(burst, label=label)
             if label:
-                log.info("[uid=%d] LAN bootstrap delayed send %s len=%d", handler.user.uid, label, len(burst))
+                log.info("[uid=%d] bootstrap delayed send %s len=%d", handler.user.uid, label, len(burst))
 
         timer = threading.Timer(delay_s, _job)
         timer.daemon = True
@@ -3956,7 +3956,7 @@ class ClientHandler:
                 cmd4 = frame[:4].decode("ascii", errors="ignore")
                 payload = frame[12:-1].decode("utf-8", errors="ignore").replace("\t", " | ")
                 parts.append(f"{cmd4}:{payload}")
-            log.info("[uid=%d] LAN room-closed-update payload %s", int(handler.user.uid), " || ".join(parts))
+            log.info("[uid=%d] room-closed-update payload %s", int(handler.user.uid), " || ".join(parts))
         except Exception:
             pass
         handler._send_later_bytes(delay_s, b"".join(frames), label="room-closed-update")
@@ -4126,7 +4126,7 @@ class ClientHandler:
                     cmd4 = frame[:4].decode("ascii", errors="ignore")
                     payload = frame[12:-1].decode("utf-8", errors="ignore").replace("\t", " | ")
                     parts.append(f"{cmd4}:{payload}")
-                log.info("[uid=%d] LAN kick-target-update payload %s", int(handler.user.uid), " || ".join(parts))
+                log.info("[uid=%d] kick-target-update payload %s", int(handler.user.uid), " || ".join(parts))
             except Exception:
                 pass
             handler._send_later_bytes(
@@ -4211,7 +4211,7 @@ class ClientHandler:
                 cmd4 = frame[:4].decode("latin1", errors="replace")
                 payload = frame[12:-1].decode("utf-8", errors="replace").replace("\t", " | ")
                 parts.append(f"{cmd4}:{payload}")
-            log.info("[uid=%d] LAN kick-target-reset payload %s", int(handler.user.uid), " || ".join(parts))
+            log.info("[uid=%d] kick-target-reset payload %s", int(handler.user.uid), " || ".join(parts))
         except Exception:
             pass
         burst = b"".join(frames)
@@ -4260,13 +4260,13 @@ class ClientHandler:
                 cmd4 = frame[:4].decode("latin1", errors="replace")
                 payload = frame[12:-1].decode("utf-8", errors="replace").replace("\t", " | ")
                 parts.append(f"{cmd4}:{payload}")
-            log.info("[uid=%d] LAN kicked-reset payload %s", int(self.user.uid), " || ".join(parts))
+            log.info("[uid=%d] kicked-reset payload %s", int(self.user.uid), " || ".join(parts))
         except Exception:
             pass
         burst = b"".join(frames)
         self._send_bootstrap_bytes(burst)
         log.info(
-            "[uid=%d] LAN bootstrap plaintext cmd=gset kicked-reset len=%d game=%s reason=%s",
+            "[uid=%d] bootstrap plaintext cmd=gset kicked-reset len=%d game=%s reason=%s",
             self.user.uid,
             len(burst),
             game_name or "-",
@@ -4375,7 +4375,7 @@ class ClientHandler:
                 except Exception:
                     pass
                 log.info(
-                    "[uid=%d] LAN bootstrap prelogin cmd=%s addr=%s port=%s tail=%s",
+                    "[uid=%d] bootstrap prelogin cmd=%s addr=%s port=%s tail=%s",
                     self.user.uid,
                     cmd,
                     self._probe_client_addr or "-",
@@ -4384,12 +4384,12 @@ class ClientHandler:
                 )
                 frame = self._make_20922_signed_binary_message("addr", b"\x00", 9)
                 self._send_probe_echo(frame)
-                log.info("[uid=%d] LAN bootstrap prelogin cmd=%s replied addr len=%d", self.user.uid, cmd, len(frame))
+                log.info("[uid=%d] bootstrap prelogin cmd=%s replied addr len=%d", self.user.uid, cmd, len(frame))
                 decoded += 1
                 continue
             if cmd == "skey":
                 log.info(
-                    "[uid=%d] LAN bootstrap prelogin cmd=%s tail=%s keys=%s",
+                    "[uid=%d] bootstrap prelogin cmd=%s tail=%s keys=%s",
                     self.user.uid,
                     cmd,
                     tail[:16].hex(),
@@ -4397,14 +4397,14 @@ class ClientHandler:
                 )
                 frame = self._make_20922_signed_binary_message("skey", b"\x00", 9)
                 self._send_probe_echo(frame)
-                log.info("[uid=%d] LAN bootstrap prelogin cmd=%s replied skey len=%d", self.user.uid, cmd, len(frame))
+                log.info("[uid=%d] bootstrap prelogin cmd=%s replied skey len=%d", self.user.uid, cmd, len(frame))
                 decoded += 1
                 continue
             if cmd == "news":
                 frame = self._news_burst()
                 self._send_probe_echo(frame)
             log.info(
-                "[uid=%d] LAN bootstrap prelogin cmd=news replied news len=%d",
+                "[uid=%d] bootstrap prelogin cmd=news replied news len=%d",
                 self.user.uid,
                 len(frame),
             )
@@ -4412,7 +4412,7 @@ class ClientHandler:
             continue
             if cmd == "~png":
                 log.info(
-                    "[uid=%d] LAN bootstrap prelogin cmd=%s ref=%s",
+                    "[uid=%d] bootstrap prelogin cmd=%s ref=%s",
                     self.user.uid,
                     cmd,
                     kv.get("REF", "-"),
@@ -4422,7 +4422,7 @@ class ClientHandler:
             if cmd == "sele":
                 frame = self._sele_frame()
                 self._send_probe_echo(frame)
-                log.info("[uid=%d] LAN bootstrap prelogin cmd=sele replied sele len=%d", self.user.uid, len(frame))
+                log.info("[uid=%d] bootstrap prelogin cmd=sele replied sele len=%d", self.user.uid, len(frame))
                 decoded += 1
                 continue
             if cmd == "auth":
@@ -4444,7 +4444,7 @@ class ClientHandler:
                 )
                 frame = self._auth_frame()
                 self._send_probe_echo(frame)
-                log.info("[uid=%d] LAN bootstrap prelogin cmd=auth replied auth len=%d", self.user.uid, len(frame))
+                log.info("[uid=%d] bootstrap prelogin cmd=auth replied auth len=%d", self.user.uid, len(frame))
                 decoded += 1
                 continue
             if cmd == "acct":
@@ -4452,8 +4452,8 @@ class ClientHandler:
                 sess, mask = self.srv.recent_dir_challenge(self.user.ip)
                 if not sess or not mask:
                     _, _, sess, mask = self._dir_fields()
-                acct_kv.setdefault("SESS", sess)
-                acct_kv.setdefault("MASK", mask)
+                acct_kv["SESS"] = sess
+                acct_kv["MASK"] = mask
                 acct_kv["CHALLENGE"] = mask
                 ok, reason, account, identifier = self.srv.create_account(acct_kv)
                 if ok and account:
@@ -4467,18 +4467,18 @@ class ClientHandler:
                     )
                     frame = self._account_create_frame(reason, ok=True)
                     self._send_probe_echo(frame)
-                    log.info("[uid=%d] LAN bootstrap prelogin cmd=acct replied acct len=%d", self.user.uid, len(frame))
+                    log.info("[uid=%d] bootstrap prelogin cmd=acct replied acct len=%d", self.user.uid, len(frame))
                 else:
                     frame = self._account_create_frame(reason, ok=False)
                     self._send_probe_echo(frame)
                     log.info(
-                        "[uid=%d] LAN bootstrap prelogin cmd=acct rejected reason=%s len=%d",
+                        "[uid=%d] bootstrap prelogin cmd=acct rejected reason=%s len=%d",
                         self.user.uid,
                         reason,
                         len(frame),
                     )
                 log.info(
-                    "[uid=%d] LAN bootstrap prelogin cmd=acct result=%s id=%s",
+                    "[uid=%d] bootstrap prelogin cmd=acct result=%s id=%s",
                     self.user.uid,
                     reason,
                     (identifier or "-")[:96],
@@ -4508,7 +4508,7 @@ class ClientHandler:
                 frame = self._pers_frame(requested, display_name, cmd_name=cmd)
                 self._send_probe_echo(frame)
                 log.info(
-                    "[uid=%d] LAN bootstrap prelogin cmd=%s replied %s len=%d persona=%s",
+                    "[uid=%d] bootstrap prelogin cmd=%s replied %s len=%d persona=%s",
                     self.user.uid,
                     cmd,
                     "cper" if cmd == "cper" else "pers",
@@ -4532,7 +4532,7 @@ class ClientHandler:
                 )
                 self._send_probe_echo(burst)
                 log.info(
-                    "[uid=%d] LAN bootstrap prelogin cmd=user replied user+auxi len=%d",
+                    "[uid=%d] bootstrap prelogin cmd=user replied user+auxi len=%d",
                     self.user.uid,
                     len(burst),
                 )
@@ -4546,11 +4546,11 @@ class ClientHandler:
                 self._record_rept(kv, source="prelogin")
                 ack = self._rept_ack_frame()
                 self._send_probe_echo(ack)
-                log.info("[uid=%d] LAN bootstrap prelogin cmd=rept replied len=%d", self.user.uid, len(ack))
+                log.info("[uid=%d] bootstrap prelogin cmd=rept replied len=%d", self.user.uid, len(ack))
                 decoded += 1
                 continue
             if cmd == "userbadc":
-                log.info("[uid=%d] LAN bootstrap prelogin cmd=userbadc ack", self.user.uid)
+                log.info("[uid=%d] bootstrap prelogin cmd=userbadc ack", self.user.uid)
                 decoded += 1
                 continue
             if cmd == "auxi":
@@ -4558,7 +4558,7 @@ class ClientHandler:
                 self.user.aux = self._probe_aux_text
                 frame = self._auxi_frame()
                 self._send_probe_echo(frame)
-                log.info("[uid=%d] LAN bootstrap prelogin cmd=auxi replied auxi len=%d", self.user.uid, len(frame))
+                log.info("[uid=%d] bootstrap prelogin cmd=auxi replied auxi len=%d", self.user.uid, len(frame))
                 decoded += 1
                 continue
             if cmd == "gsea":
@@ -4575,7 +4575,7 @@ class ClientHandler:
                         )
                 self._send_probe_echo(b"".join(frames))
                 log.info(
-                    "[uid=%d] LAN bootstrap prelogin cmd=gsea replied count=%d pass=%d",
+                    "[uid=%d] bootstrap prelogin cmd=gsea replied count=%d pass=%d",
                     self.user.uid,
                     self._game_count(self.user),
                     self._probe_gsea_seen,
@@ -4627,11 +4627,11 @@ class ClientHandler:
                     )
                 )
                 self._send_probe_echo(burst)
-                log.info("[uid=%d] LAN bootstrap prelogin cmd=gcre replied gcre+who+mgm", self.user.uid)
+                log.info("[uid=%d] bootstrap prelogin cmd=gcre replied gcre+who+mgm", self.user.uid)
                 decoded += 1
                 continue
             log.info(
-                "[uid=%d] LAN bootstrap prelogin cmd=%s ignored keys=%s tail=%s",
+                "[uid=%d] bootstrap prelogin cmd=%s ignored keys=%s tail=%s",
                 self.user.uid,
                 cmd,
                 ",".join(sorted(kv.keys())) if kv else "-",
@@ -4649,7 +4649,7 @@ class ClientHandler:
         if self._probe_expect_post534:
             self._probe_post31_buf.extend(payload)
             log.info(
-                "[uid=%d] LAN bootstrap post31 opaque chunk len=%d total=%d/534",
+                "[uid=%d] bootstrap post31 opaque chunk len=%d total=%d/534",
                 self.user.uid,
                 chunk_len,
                 len(self._probe_post31_buf),
@@ -4658,14 +4658,14 @@ class ClientHandler:
                 # Same issue as post31: the captured raw reply depends on the
                 # upstream RC4 stream position. Emit the semantic auxi(21)
                 # frame on the live stream instead so the client sees a valid
-                # header/body pair for the current LAN session.
+                # header/body pair for the current session.
                 self._send_probe_20922_binary("auxi", _AUXI21_PAYLOAD)
                 rem = bytes(self._probe_post31_buf[534:])
                 self._probe_post31_buf.clear()
                 self._probe_expect_post534 = False
                 self._probe_flow = "modern47"
                 log.info(
-                    "[uid=%d] LAN bootstrap opaque post31 total=%d replied auxi21-live len=%d rem=%d",
+                    "[uid=%d] bootstrap opaque post31 total=%d replied auxi21-live len=%d rem=%d",
                     self.user.uid,
                     534 + len(rem),
                     12 + len(_AUXI21_PAYLOAD),
@@ -4694,7 +4694,7 @@ class ClientHandler:
                 self._probe_boot_sent = True
                 self._await_probe_opaque = False
                 log.info(
-                    "[uid=%d] LAN bootstrap ?tic legacy burst sent total=%d",
+                    "[uid=%d] bootstrap ?tic legacy burst sent total=%d",
                     self.user.uid,
                     self._probe_opaque_total,
                 )
@@ -4705,7 +4705,7 @@ class ClientHandler:
             if (not self._logged_probe_summary) and self._probe_opaque_total >= 122:
                 self._logged_probe_summary = True
                 log.info(
-                    "[uid=%d] LAN bootstrap ?tic modern flow total=%d (prelogin echo active, later steps unsupported)",
+                    "[uid=%d] bootstrap ?tic modern flow total=%d (prelogin echo active, later steps unsupported)",
                     self.user.uid,
                     self._probe_opaque_total,
                 )
@@ -4714,7 +4714,7 @@ class ClientHandler:
         if (not self._logged_probe_summary) and self._probe_opaque_total > 124:
             self._logged_probe_summary = True
             log.info(
-                "[uid=%d] LAN bootstrap ?tic opaque total=%d (flow unresolved)",
+                "[uid=%d] bootstrap ?tic opaque total=%d (flow unresolved)",
                 self.user.uid,
                 self._probe_opaque_total,
             )
@@ -4759,7 +4759,7 @@ class ClientHandler:
     def _handle_bootstrap_frame(self, cmd: str, payload: bytes):
         if cmd == "@tic":
             log.info(
-                "[uid=%d] LAN bootstrap %s payload=%r",
+                "[uid=%d] bootstrap %s payload=%r",
                 self.user.uid,
                 cmd,
                 payload.rstrip(b"\x00"),
@@ -4767,7 +4767,7 @@ class ClientHandler:
             return
         if cmd == "?tic":
             log.info(
-                "[uid=%d] LAN bootstrap %s payload=%r",
+                "[uid=%d] bootstrap %s payload=%r",
                 self.user.uid,
                 cmd,
                 payload.rstrip(b"\x00"),
@@ -4789,10 +4789,10 @@ class ClientHandler:
             return
         if cmd in ("@dir", "?dir"):
             pretty = payload.rstrip(b"\x00").decode("latin1", errors="replace")
-            log.info("[uid=%d] LAN bootstrap %s payload=%r", self.user.uid, cmd, pretty[:200])
+            log.info("[uid=%d] bootstrap %s payload=%r", self.user.uid, cmd, pretty[:200])
             self._send_bootstrap_bytes(self._make_dir_reply())
             return
-        log.info("[uid=%d] LAN bootstrap unknown cmd=%r len=%d", self.user.uid, cmd, len(payload))
+        log.info("[uid=%d] bootstrap unknown cmd=%r len=%d", self.user.uid, cmd, len(payload))
 
     def _consume_bootstrap_frames(self, buf: bytes):
         consumed = 0
@@ -4804,7 +4804,7 @@ class ClientHandler:
                     skipped = buf[consumed:next_off]
                     if skipped:
                         log.info(
-                            "[uid=%d] LAN bootstrap skipped opaque prefix len=%d head=%s",
+                            "[uid=%d] bootstrap skipped opaque prefix len=%d head=%s",
                             self.user.uid,
                             len(skipped),
                             skipped[:32].hex(),
@@ -4824,7 +4824,7 @@ class ClientHandler:
                 self._handle_plain_prelogin_frame(cmd, payload, reserved_be32=reserved_be32)
                 consumed += total
                 continue
-            log.info("[uid=%d] LAN bootstrap unhandled cmd=%r len=%d hex=%s", self.user.uid, cmd, len(payload), payload[:32].hex())
+            log.info("[uid=%d] bootstrap unhandled cmd=%r len=%d hex=%s", self.user.uid, cmd, len(payload), payload[:32].hex())
             consumed += total
             continue
         return consumed
@@ -4842,12 +4842,12 @@ class ClientHandler:
 
         if cmd == "*con":
             self._send_bootstrap_bytes(self._make_20922_tab_message("*con", []))
-            log.info("[uid=%d] LAN bootstrap plaintext cmd=*con ack", self.user.uid)
+            log.info("[uid=%d] bootstrap plaintext cmd=*con ack", self.user.uid)
             return
 
         if cmd in ("@alv", "@cnt"):
             log.info(
-                "[uid=%d] LAN bootstrap plaintext cmd=%s heartbeat keys=%s",
+                "[uid=%d] bootstrap plaintext cmd=%s heartbeat keys=%s",
                 self.user.uid,
                 cmd,
                 ",".join(sorted(kv.keys())) if kv else "-",
@@ -4878,7 +4878,7 @@ class ClientHandler:
                 )
             )
             log.info(
-                "[uid=%d] LAN bootstrap plaintext cmd=*ath replied token=%08x",
+                "[uid=%d] bootstrap plaintext cmd=*ath replied token=%08x",
                 self.user.uid,
                 reserved_be32 & 0xFFFFFFFF,
             )
@@ -4903,7 +4903,7 @@ class ClientHandler:
                 )
             )
             log.info(
-                "[uid=%d] LAN bootstrap plaintext cmd=*pat replied token=%08x persona=%s",
+                "[uid=%d] bootstrap plaintext cmd=*pat replied token=%08x persona=%s",
                 self.user.uid,
                 reserved_be32 & 0xFFFFFFFF,
                 requested,
@@ -4930,7 +4930,7 @@ class ClientHandler:
                 )
             )
             self._send_bootstrap_bytes(burst)
-            log.info("[uid=%d] LAN bootstrap plaintext cmd=PERS replied token+usr", self.user.uid)
+            log.info("[uid=%d] bootstrap plaintext cmd=PERS replied token+usr", self.user.uid)
             return
 
         if cmd == "addr":
@@ -4942,7 +4942,7 @@ class ClientHandler:
             except Exception:
                 pass
             log.info(
-                "[uid=%d] LAN bootstrap plaintext cmd=%s addr=%s port=%s tail=%s",
+                "[uid=%d] bootstrap plaintext cmd=%s addr=%s port=%s tail=%s",
                 self.user.uid,
                 cmd,
                 self._probe_client_addr or "-",
@@ -4952,15 +4952,15 @@ class ClientHandler:
             frame = self._make_20922_signed_binary_message("addr", b"\x00", 9)
             if self._prelogin_burst_after_news_enabled():
                 self._probe_deferred_addr_frame = frame
-                log.info("[uid=%d] LAN bootstrap plaintext cmd=%s deferred addr len=%d", self.user.uid, cmd, len(frame))
+                log.info("[uid=%d] bootstrap plaintext cmd=%s deferred addr len=%d", self.user.uid, cmd, len(frame))
                 return
             self._send_bootstrap_bytes(frame)
-            log.info("[uid=%d] LAN bootstrap plaintext cmd=%s replied addr len=%d", self.user.uid, cmd, len(frame))
+            log.info("[uid=%d] bootstrap plaintext cmd=%s replied addr len=%d", self.user.uid, cmd, len(frame))
             return
 
         if cmd == "skey":
             log.info(
-                "[uid=%d] LAN bootstrap plaintext cmd=%s tail=%s keys=%s",
+                "[uid=%d] bootstrap plaintext cmd=%s tail=%s keys=%s",
                 self.user.uid,
                 cmd,
                 tail[:16].hex(),
@@ -4969,10 +4969,10 @@ class ClientHandler:
             frame = self._make_20922_signed_binary_message("skey", b"\x00", 9)
             if self._prelogin_burst_after_news_enabled():
                 self._probe_deferred_skey_frame = frame
-                log.info("[uid=%d] LAN bootstrap plaintext cmd=%s deferred skey len=%d", self.user.uid, cmd, len(frame))
+                log.info("[uid=%d] bootstrap plaintext cmd=%s deferred skey len=%d", self.user.uid, cmd, len(frame))
                 return
             self._send_bootstrap_bytes(frame)
-            log.info("[uid=%d] LAN bootstrap plaintext cmd=%s replied skey len=%d", self.user.uid, cmd, len(frame))
+            log.info("[uid=%d] bootstrap plaintext cmd=%s replied skey len=%d", self.user.uid, cmd, len(frame))
             return
 
         if cmd == "news":
@@ -4984,7 +4984,7 @@ class ClientHandler:
                 self._probe_deferred_skey_frame = b""
             self._send_bootstrap_bytes(burst + frame)
             log.info(
-                "[uid=%d] LAN bootstrap plaintext cmd=%s replied prelogin_burst=%d news len=%d",
+                "[uid=%d] bootstrap plaintext cmd=%s replied prelogin_burst=%d news len=%d",
                 self.user.uid,
                 cmd,
                 len(burst),
@@ -4994,7 +4994,7 @@ class ClientHandler:
 
         if cmd == "~png":
             log.info(
-                "[uid=%d] LAN bootstrap plaintext cmd=%s ref=%s",
+                "[uid=%d] bootstrap plaintext cmd=%s ref=%s",
                 self.user.uid,
                 cmd,
                 kv.get("REF", "-"),
@@ -5006,7 +5006,7 @@ class ClientHandler:
             self._probe_seen_sele = True
             frame = self._sele_frame()
             self._send_bootstrap_bytes(frame)
-            log.info("[uid=%d] LAN bootstrap plaintext cmd=sele replied sele len=%d", self.user.uid, len(frame))
+            log.info("[uid=%d] bootstrap plaintext cmd=sele replied sele len=%d", self.user.uid, len(frame))
             return
 
         if cmd == "auth":
@@ -5029,7 +5029,7 @@ class ClientHandler:
             self._send_bootstrap_bytes(frame)
             if self._news_push_after_auth_enabled():
                 self._schedule_news_push(label="news-push-auth")
-            log.info("[uid=%d] LAN bootstrap plaintext cmd=auth replied auth len=%d", self.user.uid, len(frame))
+            log.info("[uid=%d] bootstrap plaintext cmd=auth replied auth len=%d", self.user.uid, len(frame))
             return
 
         if cmd == "acct":
@@ -5037,8 +5037,8 @@ class ClientHandler:
             sess, mask = self.srv.recent_dir_challenge(self.user.ip)
             if not sess or not mask:
                 _, _, sess, mask = self._dir_fields()
-            acct_kv.setdefault("SESS", sess)
-            acct_kv.setdefault("MASK", mask)
+            acct_kv["SESS"] = sess
+            acct_kv["MASK"] = mask
             acct_kv["CHALLENGE"] = mask
             ok, reason, account, identifier = self.srv.create_account(acct_kv)
             if ok and account:
@@ -5052,18 +5052,18 @@ class ClientHandler:
                 )
                 frame = self._account_create_frame(reason, ok=True)
                 self._send_bootstrap_bytes(frame)
-                log.info("[uid=%d] LAN bootstrap plaintext cmd=acct replied acct len=%d", self.user.uid, len(frame))
+                log.info("[uid=%d] bootstrap plaintext cmd=acct replied acct len=%d", self.user.uid, len(frame))
             else:
                 frame = self._account_create_frame(reason, ok=False)
                 self._send_bootstrap_bytes(frame)
                 log.info(
-                    "[uid=%d] LAN bootstrap plaintext cmd=acct rejected reason=%s len=%d",
+                    "[uid=%d] bootstrap plaintext cmd=acct rejected reason=%s len=%d",
                     self.user.uid,
                     reason,
                     len(frame),
                 )
             log.info(
-                "[uid=%d] LAN bootstrap plaintext cmd=acct result=%s id=%s",
+                "[uid=%d] bootstrap plaintext cmd=acct result=%s id=%s",
                 self.user.uid,
                 reason,
                 (identifier or "-")[:96],
@@ -5091,7 +5091,7 @@ class ClientHandler:
             frame = self._pers_frame(requested, display_name, cmd_name=cmd)
             self._send_bootstrap_bytes(frame)
             log.info(
-                "[uid=%d] LAN bootstrap plaintext cmd=%s replied %s len=%d persona=%s",
+                "[uid=%d] bootstrap plaintext cmd=%s replied %s len=%d persona=%s",
                 self.user.uid,
                 cmd,
                 "cper" if cmd == "cper" else "pers",
@@ -5120,7 +5120,7 @@ class ClientHandler:
             )
             self._send_bootstrap_bytes(frame)
             log.info(
-                "[uid=%d] LAN bootstrap plaintext cmd=dper persona=%r ok=%s",
+                "[uid=%d] bootstrap plaintext cmd=dper persona=%r ok=%s",
                 self.user.uid,
                 requested,
                 ok,
@@ -5144,7 +5144,7 @@ class ClientHandler:
             self._send_bootstrap_bytes(burst)
             self._broadcast_online_who(self.user, delay_s=0.03, exclude_uid=int(self.user.uid))
             log.info(
-                "[uid=%d] LAN bootstrap plaintext cmd=user replied user+who-all+sst+auxi len=%d hex=%s",
+                "[uid=%d] bootstrap plaintext cmd=user replied user+who-all+sst+auxi len=%d hex=%s",
                 self.user.uid,
                 len(burst),
                 burst.hex(),
@@ -5156,7 +5156,7 @@ class ClientHandler:
             return
 
         if cmd == "userbadc":
-            log.info("[uid=%d] LAN bootstrap plaintext cmd=userbadc ack", self.user.uid)
+            log.info("[uid=%d] bootstrap plaintext cmd=userbadc ack", self.user.uid)
             return
 
         if cmd in ("auxi", "AUXI"):
@@ -5173,7 +5173,7 @@ class ClientHandler:
                 )
             self._send_bootstrap_bytes(burst)
             self._send_later_bytes(0.04, later, label=f"{cmd.lower()}-followup")
-            log.info("[uid=%d] LAN bootstrap plaintext cmd=%s replied len=%d", self.user.uid, cmd, len(burst))
+            log.info("[uid=%d] bootstrap plaintext cmd=%s replied len=%d", self.user.uid, cmd, len(burst))
             return
 
         if cmd == "gsea":
@@ -5228,7 +5228,7 @@ class ClientHandler:
                     label="gsea-sst-empty",
                 )
             log.info(
-                "[uid=%d] LAN bootstrap plaintext cmd=gsea replied count=%d pass=%d",
+                "[uid=%d] bootstrap plaintext cmd=gsea replied count=%d pass=%d",
                 self.user.uid,
                 visible_game_count,
                 self._probe_gsea_seen,
@@ -5264,7 +5264,7 @@ class ClientHandler:
                 custflags = str(getattr(game, "_custflags", custflags) or custflags)
                 sysflags = str(getattr(game, "_sysflags", sysflags) or sysflags)
                 log.info(
-                    "[uid=%d] LAN bootstrap duplicate gcre preserved existing game=%d requested_name=%s current_name=%s",
+                    "[uid=%d] bootstrap duplicate gcre preserved existing game=%d requested_name=%s current_name=%s",
                     self.user.uid,
                     int(getattr(game, "id", 0) or 0),
                     room_name or "-",
@@ -5329,7 +5329,7 @@ class ClientHandler:
                 self._broadcast_lobby_snapshot(delay_s=0.04, exclude_uid=self.user.uid, with_gcm=True)
             self.srv.request_master_stat_refresh()
             log.info(
-                "[uid=%d] LAN bootstrap plaintext cmd=%s replied len=%d token=%08x",
+                "[uid=%d] bootstrap plaintext cmd=%s replied len=%d token=%08x",
                 self.user.uid,
                 cmd,
                 len(burst),
@@ -5373,7 +5373,7 @@ class ClientHandler:
             burst = self._make_token_tab_reply(reserved_be32, fields)
             self._send_bootstrap_bytes(burst)
             log.info(
-                "[uid=%d] LAN bootstrap plaintext cmd=GJOI callback len=%d token=%08x game=%d calluser=%d name=%s fields=%s",
+                "[uid=%d] bootstrap plaintext cmd=GJOI callback len=%d token=%08x game=%d calluser=%d name=%s fields=%s",
                 self.user.uid,
                 len(burst),
                 reserved_be32 & 0xFFFFFFFF,
@@ -5403,7 +5403,7 @@ class ClientHandler:
                 if pending_game is not None:
                     game = pending_game
                     log.info(
-                        "[uid=%d] LAN bootstrap plaintext cmd=gjoi using pending invite game=%d ident=%d name=%s from=%s invite_name=%s",
+                        "[uid=%d] bootstrap plaintext cmd=gjoi using pending invite game=%d ident=%d name=%s from=%s invite_name=%s",
                         self.user.uid,
                         int(getattr(game, "id", 0) or 0),
                         ident,
@@ -5420,7 +5420,7 @@ class ClientHandler:
             ):
                 getattr(game, "kicked_uids", set()).discard(int(self.user.uid))
                 log.info(
-                    "[uid=%d] LAN bootstrap plaintext cmd=gjoi cleared kicked state from pending invite game=%d",
+                    "[uid=%d] bootstrap plaintext cmd=gjoi cleared kicked state from pending invite game=%d",
                     self.user.uid,
                     int(getattr(game, "id", 0) or 0),
                 )
@@ -5428,7 +5428,7 @@ class ClientHandler:
                 burst = self._make_20922_tab_message("gjoi", [])
                 self._send_bootstrap_bytes(burst)
                 log.info(
-                    "[uid=%d] LAN bootstrap plaintext cmd=gjoi blocked-kicked ident=%d name=%s game=%d",
+                    "[uid=%d] bootstrap plaintext cmd=gjoi blocked-kicked ident=%d name=%s game=%d",
                     self.user.uid,
                     ident,
                     name or "-",
@@ -5478,7 +5478,7 @@ class ClientHandler:
                             should_send=lambda handler=handler: handler._game_count(handler.user) > 0,
                         )
                 log.info(
-                    "[uid=%d] LAN bootstrap plaintext cmd=gjoi joined game=%d name=%s fields=%s",
+                    "[uid=%d] bootstrap plaintext cmd=gjoi joined game=%d name=%s fields=%s",
                     self.user.uid,
                     game.id,
                     game.custom or "-",
@@ -5499,7 +5499,7 @@ class ClientHandler:
                 burst = self._make_20922_tab_message("gjoi", []) + b"".join(reset_frames)
                 self._send_bootstrap_bytes(burst)
                 log.info(
-                    "[uid=%d] LAN bootstrap plaintext cmd=gjoi no-match ident=%d name=%s removed_game=%d",
+                    "[uid=%d] bootstrap plaintext cmd=gjoi no-match ident=%d name=%s removed_game=%d",
                     self.user.uid,
                     ident,
                     name or "-",
@@ -5544,7 +5544,7 @@ class ClientHandler:
             self._on_game_departure(game or game_after, departed_uid=int(self.user.uid), removed=removed)
             self.srv.request_master_stat_refresh()
             log.info(
-                "[uid=%d] LAN bootstrap plaintext cmd=%s replied len=%d game=%d removed=%d",
+                "[uid=%d] bootstrap plaintext cmd=%s replied len=%d game=%d removed=%d",
                 self.user.uid,
                 cmd,
                 len(burst),
@@ -5570,7 +5570,7 @@ class ClientHandler:
                 )
                 self._send_later_bytes(0.01, muted_burst, label="msg-muted")
                 log.info(
-                    "[uid=%d] LAN bootstrap plaintext cmd=mesg blocked muted priv=%s attr=%s",
+                    "[uid=%d] bootstrap plaintext cmd=mesg blocked muted priv=%s attr=%s",
                     self.user.uid,
                     priv or "-",
                     attr or "-",
@@ -5591,7 +5591,7 @@ class ClientHandler:
                 special_flag = attr.upper() if attr.upper().startswith("EP") else ""
                 if target is not None and int(target.uid) == int(self.user.uid):
                     log.info(
-                        "[uid=%d] LAN bootstrap plaintext cmd=mesg private-self ignored priv=%s attr=%s",
+                        "[uid=%d] bootstrap plaintext cmd=mesg private-self ignored priv=%s attr=%s",
                         self.user.uid,
                         priv,
                         attr or "-",
@@ -5625,7 +5625,7 @@ class ClientHandler:
                         target_len = len(target_burst)
                         target_handler._send_later_bytes(0.01, target_burst, label="msg-private-target")
                 log.info(
-                    "[uid=%d] LAN bootstrap plaintext cmd=mesg private ack len=%d self=%d target=%d priv=%s attr=%s",
+                    "[uid=%d] bootstrap plaintext cmd=mesg private ack len=%d self=%d target=%d priv=%s attr=%s",
                     self.user.uid,
                     len(ack),
                     len(sender_burst),
@@ -5645,7 +5645,7 @@ class ClientHandler:
                     label="msg-broadcast",
                 )
                 log.info(
-                    "[uid=%d] LAN bootstrap plaintext cmd=mesg ack len=%d +msg len=%d attr=%s",
+                    "[uid=%d] bootstrap plaintext cmd=mesg ack len=%d +msg len=%d attr=%s",
                     self.user.uid,
                     len(ack),
                     len(burst),
@@ -5668,7 +5668,7 @@ class ClientHandler:
                 fields.append(f"USER={target}")
             self._send_bootstrap_bytes(self._make_20922_tab_message(cmd[:4], fields))
             log.info(
-                "[uid=%d] LAN bootstrap plaintext cmd=%s invite target=%s delivered=%d keys=%s",
+                "[uid=%d] bootstrap plaintext cmd=%s invite target=%s delivered=%d keys=%s",
                 self.user.uid,
                 cmd,
                 target or "-",
@@ -5683,7 +5683,7 @@ class ClientHandler:
             self._record_rept(kv, source="plaintext")
             ack = self._rept_ack_frame()
             self._send_bootstrap_bytes(ack)
-            log.info("[uid=%d] LAN bootstrap plaintext cmd=rept replied len=%d", self.user.uid, len(ack))
+            log.info("[uid=%d] bootstrap plaintext cmd=rept replied len=%d", self.user.uid, len(ack))
             return
 
         if cmd == "KICK":
@@ -5691,7 +5691,7 @@ class ClientHandler:
             if game is None or int(getattr(game, "host_uid", 0) or 0) != int(self.user.uid):
                 self._send_bootstrap_bytes(self._make_20922_tab_message("KICK", []))
                 log.info(
-                    "[uid=%d] LAN bootstrap plaintext cmd=KICK ignored game=%d host_uid=%d",
+                    "[uid=%d] bootstrap plaintext cmd=KICK ignored game=%d host_uid=%d",
                     self.user.uid,
                     int(self.user.game or 0),
                     int(getattr(game, "host_uid", 0) or 0) if game is not None else 0,
@@ -5730,7 +5730,7 @@ class ClientHandler:
             if target is None or int(getattr(target, "game", 0) or 0) != int(game.id):
                 self._send_bootstrap_bytes(self._make_20922_tab_message("KICK", []))
                 log.info(
-                    "[uid=%d] LAN bootstrap plaintext cmd=KICK no-target name=%s pers=%s uid=%d game=%d",
+                    "[uid=%d] bootstrap plaintext cmd=KICK no-target name=%s pers=%s uid=%d game=%d",
                     self.user.uid,
                     target_name or "-",
                     target_pers or "-",
@@ -5750,7 +5750,7 @@ class ClientHandler:
             self._on_game_departure(game or game_after, departed_uid=int(target.uid), removed=removed)
             self.srv.request_master_stat_refresh()
             log.info(
-                "[uid=%d] LAN bootstrap plaintext cmd=KICK target_uid=%d target=%s game=%d removed=%d",
+                "[uid=%d] bootstrap plaintext cmd=KICK target_uid=%d target=%s game=%d removed=%d",
                 self.user.uid,
                 int(target.uid),
                 self._display_name_for(target),
@@ -5791,7 +5791,7 @@ class ClientHandler:
             if game is not None and not previous_ready:
                 self._emit_ready_peer_state(game, self.user, delay_s=0.005)
             log.info(
-                "[uid=%d] LAN bootstrap plaintext cmd=TERM replied len=%d ready=%d/%d countdown=%d",
+                "[uid=%d] bootstrap plaintext cmd=TERM replied len=%d ready=%d/%d countdown=%d",
                 self.user.uid,
                 len(burst),
                 ready_count,
@@ -5848,7 +5848,7 @@ class ClientHandler:
                 burst = make_gset_reply(response_fields) + reset
                 self._send_bootstrap_bytes(burst)
                 log.info(
-                    "[uid=%d] LAN bootstrap plaintext cmd=%s stale-room-reset len=%d token=%08x name=%s removed_game=%d userflags=%s",
+                    "[uid=%d] bootstrap plaintext cmd=%s stale-room-reset len=%d token=%08x name=%s removed_game=%d userflags=%s",
                     self.user.uid,
                     cmd,
                     len(burst),
@@ -5920,7 +5920,7 @@ class ClientHandler:
                 ):
                     self._emit_kick_target_update(self, game, delay_s=0.005)
                 log.info(
-                    "[uid=%d] LAN bootstrap plaintext cmd=%s kick len=%d token=%08x name=%s kick=%s target_uid=%d removed=%d keys=%s",
+                    "[uid=%d] bootstrap plaintext cmd=%s kick len=%d token=%08x name=%s kick=%s target_uid=%d removed=%d keys=%s",
                     self.user.uid,
                     cmd,
                     len(burst),
@@ -5950,7 +5950,7 @@ class ClientHandler:
                     self._send_bootstrap_bytes(burst)
                     self._emit_kick_target_update(self, game, delay_s=0.005)
                     log.info(
-                        "[uid=%d] LAN bootstrap plaintext cmd=%s kicked-update len=%d token=%08x game=%s reason=%s",
+                        "[uid=%d] bootstrap plaintext cmd=%s kicked-update len=%d token=%08x game=%s reason=%s",
                         self.user.uid,
                         cmd,
                         len(burst),
@@ -6016,7 +6016,7 @@ class ClientHandler:
             self._send_bootstrap_bytes(burst)
             burst_text = burst[12:-1].decode("utf-8", errors="ignore").replace("\t", " | ")
             log.info(
-                "[uid=%d] LAN bootstrap plaintext cmd=%s replied len=%d token=%08x ready=%d/%d userflags=%d userflags_present=%d duplicate=%d userpart=%s userparams=%s name=%s keys=%s fields=%s",
+                "[uid=%d] bootstrap plaintext cmd=%s replied len=%d token=%08x ready=%d/%d userflags=%d userflags_present=%d duplicate=%d userpart=%s userparams=%s name=%s keys=%s fields=%s",
                 self.user.uid,
                 cmd,
                 len(burst),
@@ -6164,7 +6164,7 @@ class ClientHandler:
             if game is not None and (requested_name or requested_pers) and not self_target:
                 self._emit_onln_game_state(game, self.user, delay_s=0.006)
             log.info(
-                "[uid=%d] LAN bootstrap plaintext cmd=onln replied len=%d preburst=%d game=%d requested_name=%s requested_pers=%s target_uid=%d target=%s fields=%s",
+                "[uid=%d] bootstrap plaintext cmd=onln replied len=%d preburst=%d game=%d requested_name=%s requested_pers=%s target_uid=%d target=%s fields=%s",
                 self.user.uid,
                 len(onln_frame),
                 len(burst),
@@ -6186,7 +6186,7 @@ class ClientHandler:
                         game = cand
                         break
             log.info(
-                "[uid=%d] LAN bootstrap plaintext cmd=gsta request body_len=%d tail_len=%d body_hex=%s",
+                "[uid=%d] bootstrap plaintext cmd=gsta request body_len=%d tail_len=%d body_hex=%s",
                 self.user.uid,
                 len(body),
                 len(tail),
@@ -6240,7 +6240,7 @@ class ClientHandler:
                         elif field.startswith("LADDR1="):
                             peer_laddr = field[7:]
                     log.info(
-                        "[uid=%d] LAN bootstrap gsta state viewer=%d host_uid=%d host_addr=%s host_laddr=%s peer_addr=%s peer_laddr=%s relay=%s",
+                        "[uid=%d] bootstrap gsta state viewer=%d host_uid=%d host_addr=%s host_laddr=%s peer_addr=%s peer_laddr=%s relay=%s",
                         self.user.uid,
                         viewer_uid,
                         host_uid,
@@ -6252,7 +6252,7 @@ class ClientHandler:
                     )
                     try:
                         log.info(
-                            "[uid=%d] LAN bootstrap gsta payload viewer=%d mgm=%s || ses=%s",
+                            "[uid=%d] bootstrap gsta payload viewer=%d mgm=%s || ses=%s",
                             self.user.uid,
                             viewer_uid,
                             " | ".join(start_fields),
@@ -6264,7 +6264,7 @@ class ClientHandler:
                     if handler is not self:
                         handler._send_bootstrap_bytes(burst)
                         log.info(
-                            "[uid=%d] LAN bootstrap gsta send peer-ack viewer=%d len=%d",
+                            "[uid=%d] bootstrap gsta send peer-ack viewer=%d len=%d",
                             self.user.uid,
                             viewer_uid,
                             len(burst),
@@ -6277,7 +6277,7 @@ class ClientHandler:
                     # preventing it from sending any UDP in the race.
                     handler._send_bootstrap_bytes(payload)
                     log.info(
-                        "[uid=%d] LAN bootstrap gsta send %s len=%d",
+                        "[uid=%d] bootstrap gsta send %s len=%d",
                         self.user.uid,
                         label,
                         len(payload),
@@ -6297,7 +6297,7 @@ class ClientHandler:
                         self.srv.udp_relay_reset_room(int(game.id), preserve_recent=False)
                     game.start()
             log.info(
-                "[uid=%d] LAN bootstrap plaintext cmd=gsta replied len=%d name=%s tail=%s ack=%s",
+                "[uid=%d] bootstrap plaintext cmd=gsta replied len=%d name=%s tail=%s ack=%s",
                 self.user.uid,
                 len(burst),
                 name or "-",
@@ -6307,7 +6307,7 @@ class ClientHandler:
             return
 
         log.info(
-            "[uid=%d] LAN bootstrap plaintext cmd=%s ignored keys=%s tail=%s",
+            "[uid=%d] bootstrap plaintext cmd=%s ignored keys=%s tail=%s",
             self.user.uid,
             cmd,
             ",".join(sorted(kv.keys())) if kv else "-",
@@ -6351,7 +6351,7 @@ class ClientHandler:
                     consumed = self._consume_bootstrap_frames(buf)
                     if consumed:
                         buf = buf[consumed:]
-                        # LAN bootstrap is multi-stage and frames may arrive in
+                        # bootstrap is multi-stage and frames may arrive in
                         # separate recv() calls (@tic first, then @dir / ?tic).
                         # Do not drop out of bootstrap mode just because the
                         # current buffer was fully consumed.
@@ -6361,7 +6361,7 @@ class ClientHandler:
                         if not self._logged_probe_opaque:
                             self._logged_probe_opaque = True
                             log.info(
-                                "[uid=%d] LAN bootstrap opaque-after-?tic len=%d head=%s",
+                                "[uid=%d] bootstrap opaque-after-?tic len=%d head=%s",
                                 self.user.uid,
                                 len(buf),
                                 buf[:128].hex(),

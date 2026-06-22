@@ -40,12 +40,73 @@ from protocol import encode_message
 # Logging setup                                                        #
 # ------------------------------------------------------------------ #
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)-14s] %(levelname)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+_LOG_FORMAT = "%(asctime)s [%(name)-14s] %(levelname)s: %(message)s"
+_LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+
+logging.basicConfig(level=logging.WARNING, format=_LOG_FORMAT, datefmt=_LOG_DATEFMT)
 log = logging.getLogger("server")
+
+
+def _cfg_bool(value: object) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    try:
+        return int(value or 0) != 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _log_level(value: object, default: int = logging.INFO) -> Optional[int]:
+    text = str(value or "").strip().upper()
+    if text in ("", "DEFAULT"):
+        return default
+    if text in ("0", "OFF", "NONE", "DISABLED"):
+        return None
+    if text.isdigit():
+        return int(text)
+    level = logging._nameToLevel.get(text)
+    return level if isinstance(level, int) else default
+
+
+def configure_logging(cfg: Config) -> None:
+    debug_enabled = _cfg_bool(cfg.get("DEBUG_MODE", 0))
+    console_level = _log_level(cfg.get("LOG_CONSOLE_LEVEL", cfg.get("LOG_LEVEL", "WARNING")), logging.WARNING)
+    file_level = _log_level(cfg.get("LOG_FILE_LEVEL", "INFO"), logging.INFO)
+    if debug_enabled and file_level is not None:
+        file_level = logging.DEBUG
+
+    formatter = logging.Formatter(_LOG_FORMAT, _LOG_DATEFMT)
+    handlers: list[logging.Handler] = []
+
+    if console_level is not None:
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(console_level)
+        console_handler.setFormatter(formatter)
+        handlers.append(console_handler)
+
+    log_file = str(cfg.get("LOG_FILE", "") or "").strip()
+    if log_file and file_level is not None:
+        if not os.path.isabs(log_file):
+            log_file = os.path.abspath(log_file)
+        os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
+        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+        file_handler.setLevel(file_level)
+        file_handler.setFormatter(formatter)
+        handlers.append(file_handler)
+
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+        handler.close()
+    for handler in handlers:
+        root.addHandler(handler)
+
+    if handlers:
+        root.setLevel(min(handler.level for handler in handlers))
+    else:
+        root.addHandler(logging.NullHandler())
+        root.setLevel(logging.CRITICAL + 1)
 
 
 class UDPRelayVerboseFilter(logging.Filter):
@@ -189,6 +250,7 @@ class GameServer:
         self._config_path = os.path.abspath(config_path)
         self.cfg = Config()
         self.cfg.load(config_path)
+        configure_logging(self.cfg)
 
         # Subsystems
         self.users      = UserManager(self.cfg)
@@ -322,25 +384,25 @@ class GameServer:
     def _sync_udp_relay_verbose_filter(self) -> None:
         _udp_relay_verbose_filter.enabled = bool(self._udp_relay_verbose)
 
-    def lan_auth_verify_enabled(self) -> bool:
+    def auth_verify_enabled(self) -> bool:
         return self._cfg_flag("LAN_AUTH_VERIFY", "AUTH_VERIFY")
 
-    def lan_auth_capture_enabled(self) -> bool:
+    def auth_capture_enabled(self) -> bool:
         return self._cfg_flag("LAN_AUTH_CAPTURE", "AUTH_CAPTURE")
 
-    def lan_auth_auto_enroll_enabled(self) -> bool:
+    def auth_auto_enroll_enabled(self) -> bool:
         return self._cfg_flag("LAN_AUTH_AUTO_ENROLL", "AUTH_AUTO_ENROLL")
 
-    def lan_auth_allow_create_enabled(self) -> bool:
+    def auth_allow_create_enabled(self) -> bool:
         return self._cfg_flag("LAN_AUTH_ALLOW_CREATE", "AUTH_ALLOW_CREATE")
 
-    def lan_auth_mode(self) -> str:
+    def auth_mode(self) -> str:
         mode = str(self.cfg.get("LAN_AUTH_MODE", self.cfg.get("AUTH_MODE", "password")) or "password").strip().lower()
         if mode in ("account", "user", "whitelist", "name"):
             return "account"
         return "password"
 
-    def lan_auth_migrate_plaintext_enabled(self) -> bool:
+    def auth_migrate_plaintext_enabled(self) -> bool:
         raw = self.cfg.get("LAN_AUTH_MIGRATE_PLAINTEXT", self.cfg.get("AUTH_MIGRATE_PLAINTEXT", "1"))
         return (
             self._cfg_flag("LAN_AUTH_MIGRATE_PLAINTEXT", "LAN_AUTH_SECURE_STORE", "AUTH_MIGRATE_PLAINTEXT", "AUTH_SECURE_STORE")
@@ -427,13 +489,6 @@ class GameServer:
             if text:
                 out.append(text)
         return out
-
-    @staticmethod
-    def _auth_pbkdf2_iterations() -> int:
-        return 210_000
-
-    def auth_pass_hash_algo(self) -> str:
-        return str(self.cfg.get("AUTH_PASS_HASH", "pbkdf2") or "pbkdf2").strip().lower()
 
     def auth_pbkdf2_iterations(self) -> int:
         try:
@@ -716,14 +771,20 @@ class GameServer:
                 continue
             text_value = str(value)
             if text_value:
-                sha256s.append(hashlib.sha256(text_value.encode("utf-8", errors="ignore")).hexdigest())
+                secured["pass_wire_pbkdf2"] = self._auth_pbkdf2_encode(
+                    text_value,
+                    iterations=self.auth_pbkdf2_iterations(),
+                )
             changed = True
 
         for key in self._auth_plain_password_list_keys():
             values = self._auth_list(secured.pop(key, None))
             if values:
-                for text_value in values:
-                    sha256s.append(hashlib.sha256(str(text_value).encode("utf-8", errors="ignore")).hexdigest())
+                secured["pass_wire_hashes"] = [
+                    self._auth_pbkdf2_encode(str(text_value), iterations=self.auth_pbkdf2_iterations())
+                    for text_value in values
+                    if str(text_value or "")
+                ]
                 changed = True
 
         deduped: List[str] = []
@@ -737,15 +798,10 @@ class GameServer:
             secured["pass_wire_sha256s"] = deduped
             changed = True
 
-        if deduped:
-            for key in ("pass_wire_hashes",):
-                if key in secured:
-                    secured.pop(key, None)
-                    changed = True
         return secured, changed
 
     def _auth_secure_accounts(self, accounts: List[dict]) -> tuple[List[dict], bool]:
-        if not self.lan_auth_migrate_plaintext_enabled():
+        if not self.auth_migrate_plaintext_enabled():
             return accounts, False
         secured_accounts: List[dict] = []
         changed = False
@@ -775,15 +831,15 @@ class GameServer:
                     data = json.load(fh)
                 accounts = self._auth_extract_accounts(data)
             except Exception as exc:
-                log.warning("Failed to load LAN auth accounts from '%s': %s", path, exc)
+                log.warning("Failed to load auth accounts from '%s': %s", path, exc)
                 accounts = []
             accounts, migrated = self._auth_secure_accounts(accounts)
             self._auth_accounts_path = path
             self._auth_accounts_mtime = mtime
             self._auth_accounts_cache = accounts
-            log.info("Loaded LAN auth accounts from '%s' (accounts=%d)", path, len(accounts))
+            log.info("Loaded auth accounts from '%s' (accounts=%d)", path, len(accounts))
             if migrated:
-                log.info("Migrating LAN auth accounts to hashed password storage.")
+                log.info("Migrating auth accounts to hashed password storage.")
                 self._save_auth_accounts(accounts)
             return self._auth_accounts_cache
 
@@ -806,10 +862,10 @@ class GameServer:
                     self._auth_accounts_mtime = -1.0
                 self._auth_accounts_path = path
                 self._auth_accounts_cache = payload["users"]
-            log.info("Saved LAN auth accounts to '%s' (accounts=%d)", path, len(accounts))
+            log.info("Saved auth accounts to '%s' (accounts=%d)", path, len(accounts))
             return True
         except Exception as exc:
-            log.warning("Failed to save LAN auth accounts to '%s': %s", path, exc)
+            log.warning("Failed to save auth accounts to '%s': %s", path, exc)
             return False
 
     def _append_auth_capture(self, kv: dict, identifier: str, password: str) -> None:
@@ -835,7 +891,7 @@ class GameServer:
             with open(path, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, sort_keys=True) + "\n")
         except Exception as exc:
-            log.warning("Failed to append LAN auth capture to '%s': %s", path, exc)
+            log.warning("Failed to append auth capture to '%s': %s", path, exc)
 
     def _auth_build_account(self, kv: dict, identifier: str, password: str) -> dict:
         name = self._auth_kv_value(kv, "NAME", "USER", "USERNAME", "LOGIN") or identifier
@@ -857,11 +913,10 @@ class GameServer:
         if password:
             candidates = self._auth_password_candidates(kv, password)
             plaintext = candidates[1] if len(candidates) > 1 else candidates[0] if candidates else password
-            algo = self.auth_pass_hash_algo()
-            if algo == "sha256":
-                account["pass_wire_sha256"] = hashlib.sha256(plaintext.encode("utf-8", errors="ignore")).hexdigest()
-            else:
-                account["pass_wire_pbkdf2"] = self._auth_pbkdf2_encode(plaintext, iterations=self.auth_pbkdf2_iterations())
+            account["pass_wire_pbkdf2"] = self._auth_pbkdf2_encode(
+                plaintext,
+                iterations=self.auth_pbkdf2_iterations(),
+            )
         if email:
             account["email"] = email
         return account
@@ -903,7 +958,7 @@ class GameServer:
                 selected["name"] = personas[0]
             ok = self._save_auth_accounts(accounts)
             if ok:
-                log.info("LAN auth persona added account=%s persona=%s", identifier or "-", persona)
+                log.info("auth persona added account=%s persona=%s", identifier or "-", persona)
             return ok
         return True
 
@@ -915,8 +970,14 @@ class GameServer:
         accounts = self._load_auth_accounts()
         if not accounts:
             return False
+        ident_norm = self._auth_norm(identifier)
         selected = None
-        if len(accounts) == 1:
+        if ident_norm:
+            for account in accounts:
+                if ident_norm in self._auth_account_identities(account):
+                    selected = account
+                    break
+        if selected is None and len(accounts) == 1:
             selected = accounts[0]
         if selected is None:
             return False
@@ -929,7 +990,7 @@ class GameServer:
         selected["personas"] = personas
         ok = self._save_auth_accounts(accounts)
         if ok:
-            log.info("LAN auth persona removed account=%s persona=%s", identifier or "-", persona)
+            log.info("auth persona removed account=%s persona=%s", identifier or "-", persona)
         return ok
 
     def _auth_enroll_account(self, accounts: List[dict], kv: dict, identifier: str, password: str) -> Optional[dict]:
@@ -951,7 +1012,7 @@ class GameServer:
             "U2_OLX_MAIL",
         )
         password = self._auth_kv_value(kv, "PASSWORD", "PASS", "PWORD", "PWD")
-        if not self.lan_auth_allow_create_enabled():
+        if not self.auth_allow_create_enabled():
             return False, "create_disabled", {}, identifier
         if not identifier:
             return False, "missing_identifier", {}, ""
@@ -1036,13 +1097,13 @@ class GameServer:
             "NAME",
         )
         password = self._auth_kv_value(kv, "PASSWORD", "PASS", "PWORD", "PWD")
-        mode = self.lan_auth_mode()
-        if self.lan_auth_capture_enabled():
+        mode = self.auth_mode()
+        if self.auth_capture_enabled():
             safe_keys = ",".join(sorted(str(key).strip().upper() for key in kv.keys()))
             pses = self._auth_kv_value(kv, "PSES")
             pass_digest = hashlib.sha256(password.encode("utf-8", errors="ignore")).hexdigest()[:12]
             log.warning(
-                "LAN auth capture id=%r pass_len=%d pass_sha256=%s pses=%r keys=%s",
+                "auth capture id=%r pass_len=%d pass_sha256=%s pses=%r keys=%s",
                 identifier,
                 len(password),
                 pass_digest,
@@ -1051,20 +1112,20 @@ class GameServer:
             )
             self._append_auth_capture(kv, identifier, password)
 
-        if not self.lan_auth_verify_enabled():
+        if not self.auth_verify_enabled():
             return True, "disabled", {}, identifier
 
         if not identifier:
             return False, "missing_identifier", {}, ""
         if self._auth_is_rate_limited(identifier):
-            log.warning("LAN auth rate limited id=%r", identifier)
+            log.warning("auth rate limited id=%r", identifier)
             return False, "rate_limited", {}, identifier
         if mode != "account" and not password:
             return False, "missing_password", {}, identifier
 
         accounts = self._load_auth_accounts()
         if not accounts:
-            if self.lan_auth_auto_enroll_enabled():
+            if self.auth_auto_enroll_enabled():
                 account = self._auth_enroll_account(accounts, kv, identifier, password)
                 if account:
                     return True, "enrolled", dict(account), identifier
@@ -1083,14 +1144,14 @@ class GameServer:
                 return True, "ok", dict(account), identifier
             supplied_fp, expected_fps = self._auth_password_fingerprints(account, password)
             log.warning(
-                "LAN auth password mismatch id=%r supplied=%s expected=%s",
+                "auth password mismatch id=%r supplied=%s expected=%s",
                 identifier,
                 supplied_fp,
                 ";".join(expected_fps) or "-",
             )
             self._auth_note_failure(identifier)
             return False, "bad_password", {}, identifier
-        if self.lan_auth_auto_enroll_enabled():
+        if self.auth_auto_enroll_enabled():
             account = self._auth_enroll_account(accounts, kv, identifier, password)
             if account:
                 self._auth_note_success(identifier)
@@ -2020,6 +2081,7 @@ class GameServer:
         self.cfg._data = dict(DEFAULTS)
         if not self.cfg.load(self._config_path):
             return f"failed to reload config from {self._config_path}"
+        configure_logging(self.cfg)
 
         # Apply safe runtime tunables only. Listener host/port changes still need restart.
         self.users.max_users = int(self.cfg.get("USERS", self.users.max_users))
@@ -3639,7 +3701,7 @@ class GameServer:
         )
 
     def _udp_relay_host_continuation_packets(self) -> List[bytes]:
-        # Small host-side continuation observed in a working two-client LAN
+        # Small host-side continuation observed in a working two-client
         # capture. The same-PC forced-port path can miss the real host SendSocket
         # emission, so only inject this once after the peer reaches the 0x6A
         # bootstrap phase.
@@ -4747,7 +4809,7 @@ class GameServer:
                             continue
                         # In the same-PC two-client path the host instance is
                         # pinned to the lower forced port. If it never emits
-                        # the large 0x65..0x69 LAN init block, inject it from
+                        # the large 0x65..0x69 init block, inject it from
                         # the host's aux/car-state payload so the peer can
                         # leave the pre-race bootstrap loop.
                         self._udp_relay_inject_host_aux_bootstrap(int(sender.room), dst, src)
