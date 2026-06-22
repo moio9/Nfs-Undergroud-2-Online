@@ -859,14 +859,7 @@ class GameServer:
             plaintext = candidates[1] if len(candidates) > 1 else candidates[0] if candidates else password
             algo = self.auth_pass_hash_algo()
             if algo == "sha256":
-                sha256s: List[str] = []
-                seen = set()
-                for candidate in candidates:
-                    digest = hashlib.sha256(str(candidate).encode("utf-8", errors="ignore")).hexdigest()
-                    if digest not in seen:
-                        seen.add(digest)
-                        sha256s.append(digest)
-                account["pass_wire_sha256s"] = sha256s
+                account["pass_wire_sha256"] = hashlib.sha256(plaintext.encode("utf-8", errors="ignore")).hexdigest()
             else:
                 account["pass_wire_pbkdf2"] = self._auth_pbkdf2_encode(plaintext, iterations=self.auth_pbkdf2_iterations())
         if email:
