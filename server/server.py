@@ -699,6 +699,9 @@ class GameServer:
         secured = dict(account)
         changed = False
 
+        if secured.get("pass_wire_pbkdf2"):
+            return secured, changed
+
         sha256s: List[str] = []
         for key in ("password_sha256", "pass_sha256", "pass_wire_sha256"):
             value = str(secured.get(key, "") or "").strip().lower()
