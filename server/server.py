@@ -432,6 +432,15 @@ class GameServer:
     def _auth_pbkdf2_iterations() -> int:
         return 210_000
 
+    def auth_pass_hash_algo(self) -> str:
+        return str(self.cfg.get("AUTH_PASS_HASH", "pbkdf2") or "pbkdf2").strip().lower()
+
+    def auth_pbkdf2_iterations(self) -> int:
+        try:
+            return int(self.cfg.get("AUTH_PBKDF2_ITERATIONS", 210_000) or 210_000)
+        except (TypeError, ValueError):
+            return 210_000
+
     @staticmethod
     def _auth_pbkdf2_encode(secret: str, *, iterations: int = 210_000, salt: bytes | None = None) -> str:
         secret_bytes = str(secret or "").encode("utf-8", errors="ignore")
@@ -586,18 +595,15 @@ class GameServer:
         supplied = str(supplied)
 
         supplied_sha256 = hashlib.sha256(supplied.encode("utf-8", errors="ignore")).hexdigest()
-        has_fast_hash = False
         for key in ("password_sha256", "pass_sha256", "pass_wire_sha256"):
             expected = str(account.get(key, "") or "").strip().lower()
             if expected:
-                has_fast_hash = True
                 if expected == supplied_sha256:
                     return True
         for key in ("password_sha256s", "pass_sha256s", "pass_wire_sha256s"):
             for expected in GameServer._auth_list(account.get(key)):
                 expected = str(expected or "").strip().lower()
                 if expected:
-                    has_fast_hash = True
                     if expected == supplied_sha256:
                         return True
 
@@ -615,9 +621,6 @@ class GameServer:
             expected = str(account.get(key, "") or "").strip().lower()
             if expected and expected == supplied_md5:
                 return True
-
-        if has_fast_hash:
-            return False
 
         for encoded in GameServer._auth_password_hashes(account):
             if GameServer._auth_pbkdf2_verify(supplied, encoded):
@@ -732,7 +735,7 @@ class GameServer:
             changed = True
 
         if deduped:
-            for key in ("pass_wire_hashes", "pass_wire_pbkdf2", "password_pbkdf2", "pass_pbkdf2", "password_hash", "pass_hash"):
+            for key in ("pass_wire_hashes",):
                 if key in secured:
                     secured.pop(key, None)
                     changed = True
@@ -850,14 +853,19 @@ class GameServer:
         }
         if password:
             candidates = self._auth_password_candidates(kv, password)
-            sha256s: List[str] = []
-            seen = set()
-            for candidate in candidates:
-                digest = hashlib.sha256(str(candidate).encode("utf-8", errors="ignore")).hexdigest()
-                if digest not in seen:
-                    seen.add(digest)
-                    sha256s.append(digest)
-            account["pass_wire_sha256s"] = sha256s
+            plaintext = candidates[1] if len(candidates) > 1 else candidates[0] if candidates else password
+            algo = self.auth_pass_hash_algo()
+            if algo == "sha256":
+                sha256s: List[str] = []
+                seen = set()
+                for candidate in candidates:
+                    digest = hashlib.sha256(str(candidate).encode("utf-8", errors="ignore")).hexdigest()
+                    if digest not in seen:
+                        seen.add(digest)
+                        sha256s.append(digest)
+                account["pass_wire_sha256s"] = sha256s
+            else:
+                account["pass_wire_pbkdf2"] = self._auth_pbkdf2_encode(plaintext, iterations=self.auth_pbkdf2_iterations())
         if email:
             account["email"] = email
         return account

@@ -38,6 +38,8 @@ DEFAULTS = {
     "RACE_PORT":              0,
     "AUTH_VERIFY":            0,
     "AUTH_MODE":              "password",
+    "AUTH_PASS_HASH":         "pbkdf2",
+    "AUTH_PBKDF2_ITERATIONS": 210000,
     "AUTH_CAPTURE":           0,
     "AUTH_CAPTURE_FILE":      "data/auth_captures.jsonl",
     "AUTH_AUTO_ENROLL":       0,
