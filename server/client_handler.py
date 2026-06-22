@@ -2058,12 +2058,12 @@ class ClientHandler:
             "DRIFT_TIER_POINTS=0,1999,4999,9999,19999,39999,59999,79999,99999,119999",
         ]
         payload = ("\n".join(news_lines) + "\n").encode("utf-8") + b"\x00"
-        return self._make_20922_signed_binary_message(
-            "news",
-            payload,
-            567,
-            reserved_be32=0x6E657737,  # "new7"
-        )
+    	return self._make_20922_signed_binary_message(
+    		"news",
+    		payload,
+    		max(567, len(payload) + 8),
+    		reserved_be32=0x6E657737,  # "new7"
+    	)
 
     def _sele_frame(self) -> bytes:
         payload = (
