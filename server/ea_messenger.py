@@ -456,7 +456,7 @@ class EAMessengerServer:
                         return preferred
 
         try:
-            accounts = self.srv._load_lan_auth_accounts()
+            accounts = self.srv._load_auth_accounts()
         except Exception:
             accounts = []
         for account in accounts:
@@ -470,14 +470,14 @@ class EAMessengerServer:
                 if candidate_text:
                     aliases.add(candidate_text)
             for key in ("personas", "persona", "pers", "aliases", "names", "emails", "usernames", "logins"):
-                for candidate in self.srv._lan_auth_list(account.get(key)):
+                for candidate in self.srv._auth_list(account.get(key)):
                     candidate_text = self._social_raw_text(candidate)
                     if candidate_text:
                         aliases.add(candidate_text)
             if norm not in {alias.lower() for alias in aliases}:
                 continue
             for key in ("personas", "persona", "pers", "display_name", "name", "email"):
-                for candidate in self.srv._lan_auth_list(account.get(key)):
+                for candidate in self.srv._auth_list(account.get(key)):
                     candidate_text = self._social_raw_text(candidate)
                     if candidate_text:
                         return candidate_text
@@ -925,13 +925,13 @@ class EAMessengerServer:
                 for value in values:
                     add_candidate(display_names.get(value, value))
 
-        for account in self.srv._load_lan_auth_accounts():
+        for account in self.srv._load_auth_accounts():
             persona_values: List[str] = []
             for key in ("personas", "persona", "pers", "display_name", "display"):
-                persona_values.extend(self.srv._lan_auth_list(account.get(key)))
+                persona_values.extend(self.srv._auth_list(account.get(key)))
             if not persona_values:
                 for key in ("name", "username", "user"):
-                    persona_values.extend(self.srv._lan_auth_list(account.get(key)))
+                    persona_values.extend(self.srv._auth_list(account.get(key)))
             for value in persona_values:
                 add_candidate(value)
 

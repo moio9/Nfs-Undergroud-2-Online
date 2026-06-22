@@ -234,14 +234,14 @@ class GameServer:
             "pers": {},
             "name": {},
         }
-        self._lan_auth_accounts_path = ""
-        self._lan_auth_accounts_mtime = -1.0
-        self._lan_auth_accounts_cache: List[dict] = []
-        self._lan_auth_accounts_lock = threading.RLock()
-        self._lan_auth_failures: Dict[str, List[float]] = {}
-        self._lan_auth_lock = threading.Lock()
-        self._lan_dir_challenges: Dict[str, Tuple[str, str, float]] = {}
-        self._lan_dir_challenges_lock = threading.Lock()
+        self._auth_accounts_path = ""
+        self._auth_accounts_mtime = -1.0
+        self._auth_accounts_cache: List[dict] = []
+        self._auth_accounts_lock = threading.RLock()
+        self._auth_failures: Dict[str, List[float]] = {}
+        self._auth_lock = threading.Lock()
+        self._dir_challenges: Dict[str, Tuple[str, str, float]] = {}
+        self._dir_challenges_lock = threading.Lock()
         self._udp_relay_uid_addr_by_room: Dict[int, Dict[int, Addr]] = {}
         self._udp_relay_clients: Dict[Addr, UDPRelayClientState] = {}
         self._udp_relay_rooms: Dict[int, Set[Addr]] = {}
@@ -347,7 +347,7 @@ class GameServer:
             or str(raw or "1").strip().lower() not in ("0", "false", "no", "off", "")
         )
 
-    def _lan_auth_config_path(self, key: str, default: str) -> str:
+    def _auth_config_path(self, key: str, default: str) -> str:
         path = str(self.cfg.get(key, "") or "").strip()
         if not path and key.startswith("LAN_"):
             path = str(self.cfg.get(key[4:], "") or "").strip()
@@ -357,50 +357,50 @@ class GameServer:
             return path
         return os.path.abspath(os.path.join(os.path.dirname(self._config_path), path))
 
-    def _lan_auth_accounts_file(self) -> str:
-        return self._lan_auth_config_path("LAN_AUTH_ACCOUNTS_FILE", "data/auth_accounts.json")
+    def _auth_accounts_file(self) -> str:
+        return self._auth_config_path("LAN_AUTH_ACCOUNTS_FILE", "data/auth_accounts.json")
 
-    def _lan_auth_capture_file(self) -> str:
-        return self._lan_auth_config_path("LAN_AUTH_CAPTURE_FILE", "data/auth_captures.jsonl")
+    def _auth_capture_file(self) -> str:
+        return self._auth_config_path("LAN_AUTH_CAPTURE_FILE", "data/auth_captures.jsonl")
 
-    def remember_lan_dir_challenge(self, ip: str, sess: str, mask: str) -> None:
+    def remember_dir_challenge(self, ip: str, sess: str, mask: str) -> None:
         key = str(ip or "").strip()
         if not key or not sess or not mask:
             return
-        with self._lan_dir_challenges_lock:
-            self._lan_dir_challenges[key] = (str(sess), str(mask), time.time())
+        with self._dir_challenges_lock:
+            self._dir_challenges[key] = (str(sess), str(mask), time.time())
 
-    def recent_lan_dir_challenge(self, ip: str, *, max_age: float = 30.0) -> tuple[str, str]:
+    def recent_dir_challenge(self, ip: str, *, max_age: float = 30.0) -> tuple[str, str]:
         key = str(ip or "").strip()
         if not key:
             return "", ""
         now = time.time()
-        with self._lan_dir_challenges_lock:
-            item = self._lan_dir_challenges.get(key)
+        with self._dir_challenges_lock:
+            item = self._dir_challenges.get(key)
             if not item:
                 return "", ""
             sess, mask, seen_at = item
             if (now - float(seen_at)) > max_age:
-                self._lan_dir_challenges.pop(key, None)
+                self._dir_challenges.pop(key, None)
                 return "", ""
             return sess, mask
 
-    def sweep_lan_dir_challenges(self, *, max_age: float = 60.0) -> None:
+    def sweep_dir_challenges(self, *, max_age: float = 60.0) -> None:
         now = time.time()
-        with self._lan_dir_challenges_lock:
+        with self._dir_challenges_lock:
             expired = [
-                key for key, (_, _, seen_at) in self._lan_dir_challenges.items()
+                key for key, (_, _, seen_at) in self._dir_challenges.items()
                 if (now - float(seen_at)) > max_age
             ]
             for key in expired:
-                self._lan_dir_challenges.pop(key, None)
+                self._dir_challenges.pop(key, None)
 
     @staticmethod
-    def _lan_auth_norm(value) -> str:
+    def _auth_norm(value) -> str:
         return str(value or "").strip().lower()
 
     @staticmethod
-    def _lan_auth_kv_value(kv: dict, *keys: str) -> str:
+    def _auth_kv_value(kv: dict, *keys: str) -> str:
         if not kv:
             return ""
         upper = {str(k).strip().upper(): str(v).strip() for k, v in kv.items()}
@@ -411,7 +411,7 @@ class GameServer:
         return ""
 
     @staticmethod
-    def _lan_auth_list(value) -> List[str]:
+    def _auth_list(value) -> List[str]:
         if value is None:
             return []
         if isinstance(value, list):
@@ -421,7 +421,7 @@ class GameServer:
         out: List[str] = []
         for item in raw_values:
             if isinstance(item, (list, tuple)):
-                out.extend(GameServer._lan_auth_list(item))
+                out.extend(GameServer._auth_list(item))
                 continue
             text = str(item or "").strip()
             if text:
@@ -429,11 +429,11 @@ class GameServer:
         return out
 
     @staticmethod
-    def _lan_auth_pbkdf2_iterations() -> int:
+    def _auth_pbkdf2_iterations() -> int:
         return 210_000
 
     @staticmethod
-    def _lan_auth_pbkdf2_encode(secret: str, *, iterations: int = 210_000, salt: bytes | None = None) -> str:
+    def _auth_pbkdf2_encode(secret: str, *, iterations: int = 210_000, salt: bytes | None = None) -> str:
         secret_bytes = str(secret or "").encode("utf-8", errors="ignore")
         salt = os.urandom(16) if salt is None else salt
         digest = hashlib.pbkdf2_hmac("sha256", secret_bytes, salt, int(iterations))
@@ -444,7 +444,7 @@ class GameServer:
         )
 
     @staticmethod
-    def _lan_auth_pbkdf2_verify(secret: str, encoded: str) -> bool:
+    def _auth_pbkdf2_verify(secret: str, encoded: str) -> bool:
         try:
             alg, iter_text, salt_text, digest_text = str(encoded or "").split("$", 3)
             if alg != "pbkdf2_sha256":
@@ -463,29 +463,29 @@ class GameServer:
             return False
 
     @staticmethod
-    def _lan_auth_rol8(value: int, count: int) -> int:
+    def _auth_rol8(value: int, count: int) -> int:
         value &= 0xFF
         count &= 7
         return ((value << count) | (value >> (8 - count))) & 0xFF
 
     @staticmethod
-    def _lan_auth_ror8(value: int, count: int) -> int:
+    def _auth_ror8(value: int, count: int) -> int:
         value &= 0xFF
         count &= 7
         return ((value >> count) | (value << (8 - count))) & 0xFF
 
     @staticmethod
-    def _lan_auth_make_pass_token(password: str, mask: str) -> str:
+    def _auth_make_pass_token(password: str, mask: str) -> str:
         mask_bytes = str(mask or "0").encode("ascii", errors="ignore") or b"0"
         state = 0
         out = ["$"]
         for index, ch in enumerate(str(password or "").encode("latin-1", errors="ignore")):
-            state = GameServer._lan_auth_rol8(ch ^ state, 3) ^ mask_bytes[index % len(mask_bytes)]
+            state = GameServer._auth_rol8(ch ^ state, 3) ^ mask_bytes[index % len(mask_bytes)]
             out.append(f"{state & 0xFF:02x}")
         return "".join(out)
 
     @staticmethod
-    def _lan_auth_decode_pass_token(token: str, mask: str) -> Optional[str]:
+    def _auth_decode_pass_token(token: str, mask: str) -> Optional[str]:
         token = str(token or "").strip()
         if not token.startswith("$") or len(token) < 3 or (len(token) - 1) % 2:
             return None
@@ -499,33 +499,33 @@ class GameServer:
         out = bytearray()
         for index, encoded in enumerate(values):
             mask_byte = mask_bytes[index % len(mask_bytes)]
-            ch = GameServer._lan_auth_ror8(encoded ^ mask_byte, 3) ^ state
+            ch = GameServer._auth_ror8(encoded ^ mask_byte, 3) ^ state
             out.append(ch & 0xFF)
             state = encoded & 0xFF
         return out.decode("latin-1", errors="ignore")
 
     @staticmethod
-    def _lan_auth_mask_candidates(kv: dict) -> List[str]:
+    def _auth_mask_candidates(kv: dict) -> List[str]:
         masks: List[str] = []
         for key in ("MASK", "PSES", "SESS", "CHAL", "CHALLENGE"):
-            value = GameServer._lan_auth_kv_value(kv, key)
+            value = GameServer._auth_kv_value(kv, key)
             if value and value not in masks:
                 masks.append(value)
         return masks
 
     @staticmethod
-    def _lan_auth_password_hashes(account: dict) -> List[str]:
+    def _auth_password_hashes(account: dict) -> List[str]:
         hashes: List[str] = []
         for key in ("password_pbkdf2", "pass_pbkdf2", "pass_wire_pbkdf2", "password_hash", "pass_hash"):
             value = str(account.get(key, "") or "").strip()
             if value:
                 hashes.append(value)
         for key in ("password_hashes", "pass_hashes", "pass_wire_hashes"):
-            hashes.extend(GameServer._lan_auth_list(account.get(key)))
+            hashes.extend(GameServer._auth_list(account.get(key)))
         return hashes
 
     @staticmethod
-    def _lan_auth_plain_password_keys() -> tuple[str, ...]:
+    def _auth_plain_password_keys() -> tuple[str, ...]:
         return (
             "password",
             "pass",
@@ -537,29 +537,29 @@ class GameServer:
         )
 
     @staticmethod
-    def _lan_auth_plain_password_list_keys() -> tuple[str, ...]:
+    def _auth_plain_password_list_keys() -> tuple[str, ...]:
         return ("passwords", "passes", "pass_wires", "password_wires")
 
     @staticmethod
-    def _lan_auth_account_identities(account: dict) -> Set[str]:
+    def _auth_account_identities(account: dict) -> Set[str]:
         identities: Set[str] = set()
         for key in ("__key", "email", "mail", "name", "username", "user", "login", "id"):
-            value = GameServer._lan_auth_norm(account.get(key, ""))
+            value = GameServer._auth_norm(account.get(key, ""))
             if value:
                 identities.add(value)
         for key in ("aliases", "emails", "names", "usernames", "logins"):
-            for value in GameServer._lan_auth_list(account.get(key)):
-                norm = GameServer._lan_auth_norm(value)
+            for value in GameServer._auth_list(account.get(key)):
+                norm = GameServer._auth_norm(value)
                 if norm:
                     identities.add(norm)
         return identities
 
-    def _lan_auth_password_candidates(self, kv: dict, supplied: str) -> List[str]:
+    def _auth_password_candidates(self, kv: dict, supplied: str) -> List[str]:
         candidates: List[str] = []
         supplied = str(supplied or "")
         if supplied:
             candidates.append(supplied)
-        masks = self._lan_auth_mask_candidates(kv)
+        masks = self._auth_mask_candidates(kv)
         fixed_mask = str(self.cfg.get("LAN_DIR_MASK", "") or "").strip()
         if fixed_mask and fixed_mask not in masks:
             masks.append(fixed_mask)
@@ -569,18 +569,18 @@ class GameServer:
             if legacy_mask and legacy_mask not in legacy_masks:
                 legacy_masks.append(legacy_mask)
         for mask in masks:
-            decoded = self._lan_auth_decode_pass_token(supplied, mask)
+            decoded = self._auth_decode_pass_token(supplied, mask)
             if decoded and decoded not in candidates:
                 candidates.append(decoded)
             if decoded:
                 for legacy_mask in legacy_masks:
-                    legacy_token = self._lan_auth_make_pass_token(decoded, legacy_mask)
+                    legacy_token = self._auth_make_pass_token(decoded, legacy_mask)
                     if legacy_token and legacy_token not in candidates:
                         candidates.append(legacy_token)
         return candidates
 
     @staticmethod
-    def _lan_auth_password_matches_candidate(account: dict, supplied: str) -> bool:
+    def _auth_password_matches_candidate(account: dict, supplied: str) -> bool:
         if supplied is None:
             supplied = ""
         supplied = str(supplied)
@@ -594,19 +594,19 @@ class GameServer:
                 if expected == supplied_sha256:
                     return True
         for key in ("password_sha256s", "pass_sha256s", "pass_wire_sha256s"):
-            for expected in GameServer._lan_auth_list(account.get(key)):
+            for expected in GameServer._auth_list(account.get(key)):
                 expected = str(expected or "").strip().lower()
                 if expected:
                     has_fast_hash = True
                     if expected == supplied_sha256:
                         return True
 
-        for key in GameServer._lan_auth_plain_password_keys():
+        for key in GameServer._auth_plain_password_keys():
             expected = account.get(key)
             if expected is not None and str(expected) == supplied:
                 return True
-        for key in GameServer._lan_auth_plain_password_list_keys():
-            for expected in GameServer._lan_auth_list(account.get(key)):
+        for key in GameServer._auth_plain_password_list_keys():
+            for expected in GameServer._auth_list(account.get(key)):
                 if expected == supplied:
                     return True
 
@@ -619,19 +619,19 @@ class GameServer:
         if has_fast_hash:
             return False
 
-        for encoded in GameServer._lan_auth_password_hashes(account):
-            if GameServer._lan_auth_pbkdf2_verify(supplied, encoded):
+        for encoded in GameServer._auth_password_hashes(account):
+            if GameServer._auth_pbkdf2_verify(supplied, encoded):
                 return True
         return False
 
-    def _lan_auth_password_matches(self, account: dict, kv: dict, supplied: str) -> bool:
-        for candidate in self._lan_auth_password_candidates(kv, supplied):
-            if self._lan_auth_password_matches_candidate(account, candidate):
+    def _auth_password_matches(self, account: dict, kv: dict, supplied: str) -> bool:
+        for candidate in self._auth_password_candidates(kv, supplied):
+            if self._auth_password_matches_candidate(account, candidate):
                 return True
         return False
 
     @staticmethod
-    def _lan_auth_password_fingerprints(account: dict, supplied: str) -> tuple[str, List[str]]:
+    def _auth_password_fingerprints(account: dict, supplied: str) -> tuple[str, List[str]]:
         def fp(value: str) -> str:
             text = str(value or "")
             digest = hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()[:12]
@@ -639,18 +639,18 @@ class GameServer:
 
         supplied_fp = fp(supplied)
         expected: List[str] = []
-        for encoded in GameServer._lan_auth_password_hashes(account):
+        for encoded in GameServer._auth_password_hashes(account):
             parts = str(encoded).split("$", 3)
             if len(parts) >= 2 and parts[0] == "pbkdf2_sha256":
                 expected.append(f"pbkdf2_sha256:iter={parts[1]}")
             else:
                 expected.append("hash:unknown")
-        for key in GameServer._lan_auth_plain_password_keys():
+        for key in GameServer._auth_plain_password_keys():
             value = account.get(key)
             if value is not None:
                 expected.append(f"{key}:{fp(str(value))}")
-        for key in GameServer._lan_auth_plain_password_list_keys():
-            for value in GameServer._lan_auth_list(account.get(key)):
+        for key in GameServer._auth_plain_password_list_keys():
+            for value in GameServer._auth_list(account.get(key)):
                 expected.append(f"{key}:{fp(value)}")
         for key in ("password_sha256", "pass_sha256", "pass_wire_sha256"):
             value = str(account.get(key, "") or "").strip().lower()
@@ -663,7 +663,7 @@ class GameServer:
         return supplied_fp, expected
 
     @staticmethod
-    def _lan_auth_extract_accounts(data) -> List[dict]:
+    def _auth_extract_accounts(data) -> List[dict]:
         if isinstance(data, list):
             return [dict(item) for item in data if isinstance(item, dict)]
         if not isinstance(data, dict):
@@ -690,7 +690,7 @@ class GameServer:
                 out.append(item)
         return out
 
-    def _lan_auth_secure_account(self, account: dict) -> tuple[dict, bool]:
+    def _auth_secure_account(self, account: dict) -> tuple[dict, bool]:
         if not isinstance(account, dict):
             return {}, False
         secured = dict(account)
@@ -702,9 +702,9 @@ class GameServer:
             if value:
                 sha256s.append(value)
         for key in ("password_sha256s", "pass_sha256s", "pass_wire_sha256s"):
-            sha256s.extend(str(v or "").strip().lower() for v in self._lan_auth_list(secured.get(key)))
+            sha256s.extend(str(v or "").strip().lower() for v in self._auth_list(secured.get(key)))
 
-        for key in self._lan_auth_plain_password_keys():
+        for key in self._auth_plain_password_keys():
             value = secured.pop(key, None)
             if value is None:
                 continue
@@ -713,8 +713,8 @@ class GameServer:
                 sha256s.append(hashlib.sha256(text_value.encode("utf-8", errors="ignore")).hexdigest())
             changed = True
 
-        for key in self._lan_auth_plain_password_list_keys():
-            values = self._lan_auth_list(secured.pop(key, None))
+        for key in self._auth_plain_password_list_keys():
+            values = self._auth_list(secured.pop(key, None))
             if values:
                 for text_value in values:
                     sha256s.append(hashlib.sha256(str(text_value).encode("utf-8", errors="ignore")).hexdigest())
@@ -738,76 +738,76 @@ class GameServer:
                     changed = True
         return secured, changed
 
-    def _lan_auth_secure_accounts(self, accounts: List[dict]) -> tuple[List[dict], bool]:
+    def _auth_secure_accounts(self, accounts: List[dict]) -> tuple[List[dict], bool]:
         if not self.lan_auth_migrate_plaintext_enabled():
             return accounts, False
         secured_accounts: List[dict] = []
         changed = False
         for account in accounts:
-            secured, item_changed = self._lan_auth_secure_account(account)
+            secured, item_changed = self._auth_secure_account(account)
             secured_accounts.append(secured)
             changed = changed or item_changed
         return secured_accounts, changed
 
-    def _load_lan_auth_accounts(self) -> List[dict]:
-        path = self._lan_auth_accounts_file()
-        with self._lan_auth_accounts_lock:
+    def _load_auth_accounts(self) -> List[dict]:
+        path = self._auth_accounts_file()
+        with self._auth_accounts_lock:
             if not os.path.exists(path):
-                self._lan_auth_accounts_path = path
-                self._lan_auth_accounts_mtime = -1.0
-                self._lan_auth_accounts_cache = []
+                self._auth_accounts_path = path
+                self._auth_accounts_mtime = -1.0
+                self._auth_accounts_cache = []
                 return []
             try:
                 mtime = os.path.getmtime(path)
             except OSError:
-                self._lan_auth_accounts_cache = []
+                self._auth_accounts_cache = []
                 return []
-            if path == self._lan_auth_accounts_path and mtime == self._lan_auth_accounts_mtime:
-                return self._lan_auth_accounts_cache
+            if path == self._auth_accounts_path and mtime == self._auth_accounts_mtime:
+                return self._auth_accounts_cache
             try:
                 with open(path, "r", encoding="utf-8") as fh:
                     data = json.load(fh)
-                accounts = self._lan_auth_extract_accounts(data)
+                accounts = self._auth_extract_accounts(data)
             except Exception as exc:
                 log.warning("Failed to load LAN auth accounts from '%s': %s", path, exc)
                 accounts = []
-            accounts, migrated = self._lan_auth_secure_accounts(accounts)
-            self._lan_auth_accounts_path = path
-            self._lan_auth_accounts_mtime = mtime
-            self._lan_auth_accounts_cache = accounts
+            accounts, migrated = self._auth_secure_accounts(accounts)
+            self._auth_accounts_path = path
+            self._auth_accounts_mtime = mtime
+            self._auth_accounts_cache = accounts
             log.info("Loaded LAN auth accounts from '%s' (accounts=%d)", path, len(accounts))
             if migrated:
                 log.info("Migrating LAN auth accounts to hashed password storage.")
-                self._save_lan_auth_accounts(accounts)
-            return self._lan_auth_accounts_cache
+                self._save_auth_accounts(accounts)
+            return self._auth_accounts_cache
 
-    def _save_lan_auth_accounts(self, accounts: List[dict]) -> bool:
-        path = self._lan_auth_accounts_file()
+    def _save_auth_accounts(self, accounts: List[dict]) -> bool:
+        path = self._auth_accounts_file()
         tmp_path = path + ".tmp"
         try:
             parent = os.path.dirname(path)
             if parent:
                 os.makedirs(parent, exist_ok=True)
             payload = {"users": [dict(account) for account in accounts if isinstance(account, dict)]}
-            with self._lan_auth_accounts_lock:
+            with self._auth_accounts_lock:
                 with open(tmp_path, "w", encoding="utf-8") as fh:
                     json.dump(payload, fh, indent=2, sort_keys=True)
                     fh.write("\n")
                 os.replace(tmp_path, path)
                 try:
-                    self._lan_auth_accounts_mtime = os.path.getmtime(path)
+                    self._auth_accounts_mtime = os.path.getmtime(path)
                 except OSError:
-                    self._lan_auth_accounts_mtime = -1.0
-                self._lan_auth_accounts_path = path
-                self._lan_auth_accounts_cache = payload["users"]
+                    self._auth_accounts_mtime = -1.0
+                self._auth_accounts_path = path
+                self._auth_accounts_cache = payload["users"]
             log.info("Saved LAN auth accounts to '%s' (accounts=%d)", path, len(accounts))
             return True
         except Exception as exc:
             log.warning("Failed to save LAN auth accounts to '%s': %s", path, exc)
             return False
 
-    def _append_lan_auth_capture(self, kv: dict, identifier: str, password: str) -> None:
-        path = self._lan_auth_capture_file()
+    def _append_auth_capture(self, kv: dict, identifier: str, password: str) -> None:
+        path = self._auth_capture_file()
         fields = {str(k).strip().upper(): str(v).strip() for k, v in (kv or {}).items()}
         for key in ("PASSWORD", "PASS", "PWORD", "PWD"):
             if key in fields:
@@ -818,7 +818,7 @@ class GameServer:
             "identifier": identifier,
             "pass_len": len(str(password or "")),
             "pass_sha256": hashlib.sha256(pass_bytes).hexdigest(),
-            "pses": self._lan_auth_kv_value(kv, "PSES"),
+            "pses": self._auth_kv_value(kv, "PSES"),
             "keys": sorted(fields.keys()),
             "fields": fields,
         }
@@ -831,12 +831,12 @@ class GameServer:
         except Exception as exc:
             log.warning("Failed to append LAN auth capture to '%s': %s", path, exc)
 
-    def _lan_auth_build_account(self, kv: dict, identifier: str, password: str) -> dict:
-        name = self._lan_auth_kv_value(kv, "NAME", "USER", "USERNAME", "LOGIN") or identifier
-        email = self._lan_auth_kv_value(kv, "EMAIL", "MAIL", "PMAIL", "U2_OLX_MAIL")
-        persona = self._lan_auth_kv_value(kv, "PERS", "PERSO", "PERSONA") or name
+    def _auth_build_account(self, kv: dict, identifier: str, password: str) -> dict:
+        name = self._auth_kv_value(kv, "NAME", "USER", "USERNAME", "LOGIN") or identifier
+        email = self._auth_kv_value(kv, "EMAIL", "MAIL", "PMAIL", "U2_OLX_MAIL")
+        persona = self._auth_kv_value(kv, "PERS", "PERSO", "PERSONA") or name
         aliases: Set[str] = set()
-        for value in (identifier, email, name, self._lan_auth_kv_value(kv, "USER", "USERNAME", "LOGIN")):
+        for value in (identifier, email, name, self._auth_kv_value(kv, "USER", "USERNAME", "LOGIN")):
             value = str(value or "").strip()
             if value:
                 aliases.add(value)
@@ -849,7 +849,7 @@ class GameServer:
             "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         if password:
-            candidates = self._lan_auth_password_candidates(kv, password)
+            candidates = self._auth_password_candidates(kv, password)
             sha256s: List[str] = []
             seen = set()
             for candidate in candidates:
@@ -862,20 +862,20 @@ class GameServer:
             account["email"] = email
         return account
 
-    def add_lan_account_persona(self, identifier: str, persona: str) -> bool:
+    def add_account_persona(self, identifier: str, persona: str) -> bool:
         persona = str(persona or "").strip()
         identifier = str(identifier or "").strip()
         if not persona:
             return False
-        accounts = self._load_lan_auth_accounts()
+        accounts = self._load_auth_accounts()
         if not accounts:
             return False
-        ident_norm = self._lan_auth_norm(identifier)
+        ident_norm = self._auth_norm(identifier)
 
         selected = None
         if ident_norm:
             for account in accounts:
-                if ident_norm in self._lan_auth_account_identities(account):
+                if ident_norm in self._auth_account_identities(account):
                     selected = account
                     break
         if selected is None and len(accounts) == 1:
@@ -883,7 +883,7 @@ class GameServer:
         if selected is None:
             return False
 
-        personas = self._lan_auth_list(selected.get("personas"))
+        personas = self._auth_list(selected.get("personas"))
         if not personas:
             for key in ("persona", "pers", "display_name", "name"):
                 value = str(selected.get(key, "") or "").strip()
@@ -897,18 +897,18 @@ class GameServer:
                 selected["display_name"] = personas[0]
             if not selected.get("name"):
                 selected["name"] = personas[0]
-            ok = self._save_lan_auth_accounts(accounts)
+            ok = self._save_auth_accounts(accounts)
             if ok:
                 log.info("LAN auth persona added account=%s persona=%s", identifier or "-", persona)
             return ok
         return True
 
-    def remove_lan_account_persona(self, identifier: str, persona: str) -> bool:
+    def remove_account_persona(self, identifier: str, persona: str) -> bool:
         persona = str(persona or "").strip()
         identifier = str(identifier or "").strip()
         if not persona:
             return False
-        accounts = self._load_lan_auth_accounts()
+        accounts = self._load_auth_accounts()
         if not accounts:
             return False
         selected = None
@@ -916,26 +916,26 @@ class GameServer:
             selected = accounts[0]
         if selected is None:
             return False
-        personas = self._lan_auth_list(selected.get("personas"))
+        personas = self._auth_list(selected.get("personas"))
         if persona.lower() not in {p.lower() for p in personas}:
             return False
         if len(personas) <= 1:
             return False
         personas = [p for p in personas if p.lower() != persona.lower()]
         selected["personas"] = personas
-        ok = self._save_lan_auth_accounts(accounts)
+        ok = self._save_auth_accounts(accounts)
         if ok:
             log.info("LAN auth persona removed account=%s persona=%s", identifier or "-", persona)
         return ok
 
-    def _lan_auth_enroll_account(self, accounts: List[dict], kv: dict, identifier: str, password: str) -> Optional[dict]:
-        account = self._lan_auth_build_account(kv, identifier, password)
-        if not self._save_lan_auth_accounts([*accounts, account]):
+    def _auth_enroll_account(self, accounts: List[dict], kv: dict, identifier: str, password: str) -> Optional[dict]:
+        account = self._auth_build_account(kv, identifier, password)
+        if not self._save_auth_accounts([*accounts, account]):
             return None
         return account
 
-    def create_lan_account(self, kv: dict) -> Tuple[bool, str, dict, str]:
-        identifier = self._lan_auth_kv_value(
+    def create_account(self, kv: dict) -> Tuple[bool, str, dict, str]:
+        identifier = self._auth_kv_value(
             kv,
             "NAME",
             "USER",
@@ -946,7 +946,7 @@ class GameServer:
             "PMAIL",
             "U2_OLX_MAIL",
         )
-        password = self._lan_auth_kv_value(kv, "PASSWORD", "PASS", "PWORD", "PWD")
+        password = self._auth_kv_value(kv, "PASSWORD", "PASS", "PWORD", "PWD")
         if not self.lan_auth_allow_create_enabled():
             return False, "create_disabled", {}, identifier
         if not identifier:
@@ -954,73 +954,73 @@ class GameServer:
         if not password:
             return False, "missing_password", {}, identifier
 
-        accounts = self._load_lan_auth_accounts()
-        new_account = self._lan_auth_build_account(kv, identifier, password)
-        new_identities = self._lan_auth_account_identities(new_account)
+        accounts = self._load_auth_accounts()
+        new_account = self._auth_build_account(kv, identifier, password)
+        new_identities = self._auth_account_identities(new_account)
         for account in accounts:
-            if new_identities.intersection(self._lan_auth_account_identities(account)):
+            if new_identities.intersection(self._auth_account_identities(account)):
                 return False, "account_exists", dict(account), identifier
 
-        account = self._lan_auth_enroll_account(accounts, kv, identifier, password)
+        account = self._auth_enroll_account(accounts, kv, identifier, password)
         if not account:
             return False, "save_failed", {}, identifier
         return True, "created", dict(account), identifier
 
-    def _lan_auth_rate_window(self) -> float:
+    def _auth_rate_window(self) -> float:
         try:
             return max(1.0, float(self.cfg.get("LAN_AUTH_FAIL_WINDOW", 60) or 60))
         except Exception:
             return 60.0
 
-    def _lan_auth_fail_limit(self) -> int:
+    def _auth_fail_limit(self) -> int:
         try:
             return max(1, int(self.cfg.get("LAN_AUTH_FAIL_LIMIT", 5) or 5))
         except Exception:
             return 5
 
-    def _lan_auth_lockout_seconds(self) -> float:
+    def _auth_lockout_seconds(self) -> float:
         try:
             return max(1.0, float(self.cfg.get("LAN_AUTH_LOCKOUT_SECONDS", 120) or 120))
         except Exception:
             return 120.0
 
-    def _lan_auth_rate_key(self, identifier: str) -> str:
-        return self._lan_auth_norm(identifier) or "-"
+    def _auth_rate_key(self, identifier: str) -> str:
+        return self._auth_norm(identifier) or "-"
 
-    def _lan_auth_is_rate_limited(self, identifier: str) -> bool:
-        key = self._lan_auth_rate_key(identifier)
+    def _auth_is_rate_limited(self, identifier: str) -> bool:
+        key = self._auth_rate_key(identifier)
         now = time.time()
-        window = max(self._lan_auth_rate_window(), self._lan_auth_lockout_seconds())
-        with self._lan_auth_lock:
+        window = max(self._auth_rate_window(), self._auth_lockout_seconds())
+        with self._auth_lock:
             failures = [
-                ts for ts in self._lan_auth_failures.get(key, [])
+                ts for ts in self._auth_failures.get(key, [])
                 if (now - float(ts)) <= window
             ]
-            self._lan_auth_failures[key] = failures
-            if len(failures) < self._lan_auth_fail_limit():
+            self._auth_failures[key] = failures
+            if len(failures) < self._auth_fail_limit():
                 return False
             newest = max(failures) if failures else 0.0
-            return (now - newest) <= self._lan_auth_lockout_seconds()
+            return (now - newest) <= self._auth_lockout_seconds()
 
-    def _lan_auth_note_failure(self, identifier: str) -> None:
-        key = self._lan_auth_rate_key(identifier)
+    def _auth_note_failure(self, identifier: str) -> None:
+        key = self._auth_rate_key(identifier)
         now = time.time()
-        window = max(self._lan_auth_rate_window(), self._lan_auth_lockout_seconds())
-        with self._lan_auth_lock:
+        window = max(self._auth_rate_window(), self._auth_lockout_seconds())
+        with self._auth_lock:
             failures = [
-                ts for ts in self._lan_auth_failures.get(key, [])
+                ts for ts in self._auth_failures.get(key, [])
                 if (now - float(ts)) <= window
             ]
             failures.append(now)
-            self._lan_auth_failures[key] = failures[-max(self._lan_auth_fail_limit() * 2, 16):]
+            self._auth_failures[key] = failures[-max(self._auth_fail_limit() * 2, 16):]
 
-    def _lan_auth_note_success(self, identifier: str) -> None:
-        key = self._lan_auth_rate_key(identifier)
-        with self._lan_auth_lock:
-            self._lan_auth_failures.pop(key, None)
+    def _auth_note_success(self, identifier: str) -> None:
+        key = self._auth_rate_key(identifier)
+        with self._auth_lock:
+            self._auth_failures.pop(key, None)
 
-    def authenticate_lan_login(self, kv: dict) -> Tuple[bool, str, dict, str]:
-        identifier = self._lan_auth_kv_value(
+    def authenticate_login(self, kv: dict) -> Tuple[bool, str, dict, str]:
+        identifier = self._auth_kv_value(
             kv,
             "EMAIL",
             "MAIL",
@@ -1031,11 +1031,11 @@ class GameServer:
             "LOGIN",
             "NAME",
         )
-        password = self._lan_auth_kv_value(kv, "PASSWORD", "PASS", "PWORD", "PWD")
+        password = self._auth_kv_value(kv, "PASSWORD", "PASS", "PWORD", "PWD")
         mode = self.lan_auth_mode()
         if self.lan_auth_capture_enabled():
             safe_keys = ",".join(sorted(str(key).strip().upper() for key in kv.keys()))
-            pses = self._lan_auth_kv_value(kv, "PSES")
+            pses = self._auth_kv_value(kv, "PSES")
             pass_digest = hashlib.sha256(password.encode("utf-8", errors="ignore")).hexdigest()[:12]
             log.warning(
                 "LAN auth capture id=%r pass_len=%d pass_sha256=%s pses=%r keys=%s",
@@ -1045,53 +1045,53 @@ class GameServer:
                 pses,
                 safe_keys or "-",
             )
-            self._append_lan_auth_capture(kv, identifier, password)
+            self._append_auth_capture(kv, identifier, password)
 
         if not self.lan_auth_verify_enabled():
             return True, "disabled", {}, identifier
 
         if not identifier:
             return False, "missing_identifier", {}, ""
-        if self._lan_auth_is_rate_limited(identifier):
+        if self._auth_is_rate_limited(identifier):
             log.warning("LAN auth rate limited id=%r", identifier)
             return False, "rate_limited", {}, identifier
         if mode != "account" and not password:
             return False, "missing_password", {}, identifier
 
-        accounts = self._load_lan_auth_accounts()
+        accounts = self._load_auth_accounts()
         if not accounts:
             if self.lan_auth_auto_enroll_enabled():
-                account = self._lan_auth_enroll_account(accounts, kv, identifier, password)
+                account = self._auth_enroll_account(accounts, kv, identifier, password)
                 if account:
                     return True, "enrolled", dict(account), identifier
             return False, "no_accounts", {}, identifier
 
-        ident_norm = self._lan_auth_norm(identifier)
+        ident_norm = self._auth_norm(identifier)
         for account in accounts:
-            identities = self._lan_auth_account_identities(account)
+            identities = self._auth_account_identities(account)
             if ident_norm not in identities:
                 continue
             if mode == "account":
-                self._lan_auth_note_success(identifier)
+                self._auth_note_success(identifier)
                 return True, "ok", dict(account), identifier
-            if self._lan_auth_password_matches(account, kv, password):
-                self._lan_auth_note_success(identifier)
+            if self._auth_password_matches(account, kv, password):
+                self._auth_note_success(identifier)
                 return True, "ok", dict(account), identifier
-            supplied_fp, expected_fps = self._lan_auth_password_fingerprints(account, password)
+            supplied_fp, expected_fps = self._auth_password_fingerprints(account, password)
             log.warning(
                 "LAN auth password mismatch id=%r supplied=%s expected=%s",
                 identifier,
                 supplied_fp,
                 ";".join(expected_fps) or "-",
             )
-            self._lan_auth_note_failure(identifier)
+            self._auth_note_failure(identifier)
             return False, "bad_password", {}, identifier
         if self.lan_auth_auto_enroll_enabled():
-            account = self._lan_auth_enroll_account(accounts, kv, identifier, password)
+            account = self._auth_enroll_account(accounts, kv, identifier, password)
             if account:
-                self._lan_auth_note_success(identifier)
+                self._auth_note_success(identifier)
                 return True, "enrolled", dict(account), identifier
-        self._lan_auth_note_failure(identifier)
+        self._auth_note_failure(identifier)
         return False, "unknown_account", {}, identifier
 
     def _csv_ports(self, *keys: str) -> List[int]:
@@ -1642,13 +1642,13 @@ class GameServer:
                 self._admin_write(response)
 
     def _admin_find_handler(self, uid: int) -> Optional[ClientHandler]:
-        for handler in ClientHandler._snapshot_lan_handlers():
+        for handler in ClientHandler._snapshot_handlers():
             if int(getattr(handler.user, "uid", 0) or 0) == int(uid):
                 return handler
         return None
 
     def _admin_any_handler(self) -> Optional[ClientHandler]:
-        handlers = ClientHandler._snapshot_lan_handlers()
+        handlers = ClientHandler._snapshot_handlers()
         return handlers[0] if handlers else None
 
     def _admin_disconnect_socket(self, user: User, *, reason: str) -> None:
@@ -1802,7 +1802,7 @@ class GameServer:
             game_after, removed = self.games.leave(int(game.id), int(uid))
             helper = self._admin_any_handler()
             if helper is not None:
-                helper._lan_on_game_departure(game or game_after, departed_uid=int(uid), removed=removed)
+                helper._on_game_departure(game or game_after, departed_uid=int(uid), removed=removed)
         if int(user.room or 0):
             self.rooms.leave(int(user.room), int(uid))
         self.users.remove(int(uid))
@@ -1826,11 +1826,11 @@ class GameServer:
             user.stat = STAT_ROOM if int(user.room or 0) else STAT_LOBBY
 
         if handler is not None and game_ref is not None:
-            handler._lan_emit_game_leave_reset(handler, game_ref, delay_s=0.01, self_leave=False)
+            handler._emit_game_leave_reset(handler, game_ref, delay_s=0.01, self_leave=False)
 
         helper = handler or self._admin_any_handler()
         if helper is not None and game_ref is not None:
-            helper._lan_on_game_departure(game_ref, departed_uid=int(uid), removed=removed)
+            helper._on_game_departure(game_ref, departed_uid=int(uid), removed=removed)
 
         self.request_master_stat_refresh()
         if removed:
@@ -1862,7 +1862,7 @@ class GameServer:
 
         helper = self._admin_any_handler()
         if helper is not None:
-            helper._lan_on_game_departure(removed_game, departed_uid=0, removed=True)
+            helper._on_game_departure(removed_game, departed_uid=0, removed=True)
 
         self.request_master_stat_refresh()
         return f"closed game {game_id}"
@@ -1872,7 +1872,7 @@ class GameServer:
             return False
         handler = self._admin_find_handler(int(user.uid))
         if handler is not None:
-            fields = handler._lan_msg_fields(
+            fields = handler._msg_fields(
                 text,
                 sender="Server",
                 flag="P" if private else "",
@@ -1894,11 +1894,11 @@ class GameServer:
 
     def _admin_push_news(self) -> str:
         delivered = 0
-        for handler in ClientHandler._snapshot_lan_handlers():
+        for handler in ClientHandler._snapshot_handlers():
             if not bool(getattr(handler.user, "connected", False)):
                 continue
             try:
-                handler._send_later_bytes(0.01, handler._lan_news_burst(), label="admin-pushnews")
+                handler._send_later_bytes(0.01, handler._news_burst(), label="admin-pushnews")
                 delivered += 1
             except Exception as exc:
                 log.warning(
@@ -2036,10 +2036,10 @@ class GameServer:
         self.stats.stat_refresh = int(self.cfg.get("SERVER_STAT_REFRESH", self.stats.stat_refresh))
         self._udp_relay_verbose = self._cfg_flag("UDP_RELAY_VERBOSE", "UDP_DEBUG")
         self._sync_udp_relay_verbose_filter()
-        with self._lan_auth_accounts_lock:
-            self._lan_auth_accounts_path = ""
-            self._lan_auth_accounts_mtime = -1.0
-            self._lan_auth_accounts_cache = []
+        with self._auth_accounts_lock:
+            self._auth_accounts_path = ""
+            self._auth_accounts_mtime = -1.0
+            self._auth_accounts_cache = []
         self.request_master_stat_refresh()
         self._load_admin_bans()
         self.messenger.load_social_relations()
@@ -2997,7 +2997,7 @@ class GameServer:
                 self.request_master_stat_refresh()
                 helper = self._admin_any_handler()
                 if helper is not None:
-                    helper._lan_on_game_departure(game or game_after, departed_uid=int(user.uid), removed=removed)
+                    helper._on_game_departure(game or game_after, departed_uid=int(user.uid), removed=removed)
                 elif game_after is None:
                     self.udp_relay_reset_room(game_id)
                 log.info(
@@ -3020,7 +3020,7 @@ class GameServer:
             self.request_master_stat_refresh()
             helper = self._admin_any_handler()
             if helper is not None:
-                helper._lan_on_game_departure(game or game_after, departed_uid=int(user.uid), removed=removed)
+                helper._on_game_departure(game or game_after, departed_uid=int(user.uid), removed=removed)
             else:
                 self.udp_relay_reset_room(game_id)
             log.info(
@@ -3205,7 +3205,7 @@ class GameServer:
             return {}
         return {addr: str(hosts[idx]) for idx, addr in enumerate(sorted_members)}
 
-    def _udp_relay_room_lan_endpoints(self, room: Optional[int]) -> List[UDPRelayRoomEndpoint]:
+    def _udp_relay_room_endpoints(self, room: Optional[int]) -> List[UDPRelayRoomEndpoint]:
         room_id = int(room or 0)
         if room_id <= 0:
             return []
@@ -3274,8 +3274,8 @@ class GameServer:
             endpoint.presented_ip = str(hosts[idx])
         return endpoints
 
-    def _udp_relay_room_lan_addrs(self, room: Optional[int]) -> List[str]:
-        return [endpoint.presented_ip for endpoint in self._udp_relay_room_lan_endpoints(room)]
+    def _udp_relay_room_addrs(self, room: Optional[int]) -> List[str]:
+        return [endpoint.presented_ip for endpoint in self._udp_relay_room_endpoints(room)]
 
     def _udp_relay_update_spoof_ip(
         self,
@@ -3312,7 +3312,7 @@ class GameServer:
                         target[1],
                     )
                 return
-        room_endpoints = self._udp_relay_room_lan_endpoints(room)
+        room_endpoints = self._udp_relay_room_endpoints(room)
         if len(room_endpoints) != 2:
             return
         target_ip = str(target[0] or "").strip()
@@ -3438,7 +3438,7 @@ class GameServer:
         )
 
     @staticmethod
-    def _lan_aux_fields(aux_text: str) -> Dict[str, str]:
+    def _aux_fields(aux_text: str) -> Dict[str, str]:
         text = str(aux_text or "").strip()
         if not text:
             return {}
@@ -3458,8 +3458,8 @@ class GameServer:
         return out
 
     @staticmethod
-    def _udp_relay_lan_aux_bootstrap_packets(aux_text: str) -> List[bytes]:
-        fields = GameServer._lan_aux_fields(aux_text)
+    def _udp_relay_aux_bootstrap_packets(aux_text: str) -> List[bytes]:
+        fields = GameServer._aux_fields(aux_text)
         car_state = fields.get("C", "")
         if not car_state.startswith("281DC"):
             return []
@@ -3507,13 +3507,13 @@ class GameServer:
         host_user = self.users.get(host_uid)
         if host_user is None:
             return []
-        return self._udp_relay_lan_aux_bootstrap_packets(str(getattr(host_user, "aux", "") or ""))
+        return self._udp_relay_aux_bootstrap_packets(str(getattr(host_user, "aux", "") or ""))
 
     def _udp_relay_user_aux_bootstrap_packets(self, uid: int) -> List[bytes]:
         user = self.users.get(int(uid or 0))
         if user is None:
             return []
-        return self._udp_relay_lan_aux_bootstrap_packets(str(getattr(user, "aux", "") or ""))
+        return self._udp_relay_aux_bootstrap_packets(str(getattr(user, "aux", "") or ""))
 
     def _udp_relay_inject_missing_65_from_sender(
         self,
@@ -3716,7 +3716,7 @@ class GameServer:
         if sender.control_prime_count >= 3 and (now - sender.control_prime_last) < 0.75:
             return False
 
-        endpoints = self._udp_relay_room_lan_endpoints(room)
+        endpoints = self._udp_relay_room_endpoints(room)
         if len(endpoints) < 2:
             return False
 
@@ -5492,7 +5492,7 @@ class GameServer:
                 # Clean up users detached from active race TCP once UDP has
                 # gone quiet for a short grace window.
                 self._cleanup_detached_race_users()
-                self.sweep_lan_dir_challenges()
+                self.sweep_dir_challenges()
 
                 # Sweep expired games
                 self.games.sweep_expired()
