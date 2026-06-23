@@ -396,6 +396,9 @@ class GameServer:
     def auth_allow_create_enabled(self) -> bool:
         return self._cfg_flag("LAN_AUTH_ALLOW_CREATE", "AUTH_ALLOW_CREATE")
 
+    def auth_allow_password_reset_enabled(self) -> bool:
+        return self._cfg_flag("LAN_AUTH_ALLOW_PASSWORD_RESET", "AUTH_ALLOW_PASSWORD_RESET")
+
     def auth_mode(self) -> str:
         mode = str(self.cfg.get("LAN_AUTH_MODE", self.cfg.get("AUTH_MODE", "password")) or "password").strip().lower()
         if mode in ("account", "user", "whitelist", "name"):
@@ -571,7 +574,7 @@ class GameServer:
     @staticmethod
     def _auth_mask_candidates(kv: dict) -> List[str]:
         masks: List[str] = []
-        for key in ("MASK", "PSES", "SESS", "CHAL", "CHALLENGE"):
+        for key in ("MASK", "PSES", "SESS", "CHAL", "CHALLENGE", "SKEY", "LKEY"):
             value = GameServer._auth_kv_value(kv, key)
             if value and value not in masks:
                 masks.append(value)
@@ -632,6 +635,17 @@ class GameServer:
             legacy_mask = item.strip()
             if legacy_mask and legacy_mask not in legacy_masks:
                 legacy_masks.append(legacy_mask)
+        for legacy_mask in (
+            "$b54ca8de40238572024704cc4de73590",
+            "$5075626c6963204b6579",
+            "Public Key",
+            "517",
+            "1773180069",
+        ):
+            if legacy_mask and legacy_mask not in legacy_masks:
+                legacy_masks.append(legacy_mask)
+            if legacy_mask and legacy_mask not in masks:
+                masks.append(legacy_mask)
         for mask in masks:
             decoded = self._auth_decode_pass_token(supplied, mask)
             if decoded and decoded not in candidates:
@@ -687,6 +701,14 @@ class GameServer:
             if self._auth_password_matches_candidate(account, candidate):
                 return True
         return False
+
+    @staticmethod
+    def _auth_storage_password_candidate(candidates: List[str]) -> str:
+        for candidate in candidates[1:]:
+            text = str(candidate or "")
+            if text and not text.startswith("$") and all(32 <= ord(ch) < 127 for ch in text):
+                return text
+        return str(candidates[0] if candidates else "")
 
     @staticmethod
     def _auth_password_fingerprints(account: dict, supplied: str) -> tuple[str, List[str]]:
@@ -911,10 +933,9 @@ class GameServer:
             "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         if password:
-            candidates = self._auth_password_candidates(kv, password)
-            plaintext = candidates[1] if len(candidates) > 1 else candidates[0] if candidates else password
+            candidates = self._auth_password_candidates(kv, password) or [password]
             account["pass_wire_pbkdf2"] = self._auth_pbkdf2_encode(
-                plaintext,
+                self._auth_storage_password_candidate(candidates),
                 iterations=self.auth_pbkdf2_iterations(),
             )
         if email:
@@ -1022,8 +1043,28 @@ class GameServer:
         accounts = self._load_auth_accounts()
         new_account = self._auth_build_account(kv, identifier, password)
         new_identities = self._auth_account_identities(new_account)
-        for account in accounts:
+        for index, account in enumerate(accounts):
             if new_identities.intersection(self._auth_account_identities(account)):
+                if self._auth_password_matches(account, kv, password):
+                    return True, "ok", dict(account), identifier
+                if self.auth_allow_password_reset_enabled():
+                    updated = dict(account)
+                    if "pass_wire_pbkdf2" in new_account:
+                        updated["pass_wire_pbkdf2"] = new_account["pass_wire_pbkdf2"]
+                    updated.pop("pass_wire_hashes", None)
+                    for key in ("aliases", "personas"):
+                        values = self._auth_list(updated.get(key))
+                        for value in self._auth_list(new_account.get(key)):
+                            if value.lower() not in {item.lower() for item in values}:
+                                values.append(value)
+                        if values:
+                            updated[key] = values
+                    for key in ("email", "name", "display_name"):
+                        if new_account.get(key):
+                            updated[key] = new_account[key]
+                    if not self._save_auth_accounts([*accounts[:index], updated, *accounts[index + 1:]]):
+                        return False, "save_failed", {}, identifier
+                    return True, "updated", dict(updated), identifier
                 return False, "account_exists", dict(account), identifier
 
         account = self._auth_enroll_account(accounts, kv, identifier, password)

@@ -48,6 +48,7 @@ DEFAULTS = {
     "AUTH_FAIL_WINDOW":       60,
     "AUTH_LOCKOUT_SECONDS":   120,
     "AUTH_ALLOW_CREATE":      0,
+    "AUTH_ALLOW_PASSWORD_RESET": 0,
     "AUTH_ACCOUNTS_FILE":     "",
     "AUTH_LEGACY_MASKS":      "",
     "AUTH_REQUIRED_FIELDS":   "",
